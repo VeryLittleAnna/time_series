@@ -63,7 +63,7 @@ def learn(dataset_X, dataset_y, window_size=None):
     batch_size = 128
     # history = model.fit(Datagen(dataset, batch_size=batch_size, window_size=window_size), \
     #         epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
-    history = model.fit(dataset_X, dataset_y, epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
+    history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
     return model, history
 
 
