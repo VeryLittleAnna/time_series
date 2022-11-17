@@ -11,6 +11,8 @@ import tensorflow as tf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from sktime.forecasting.model_selection import SlidingWindowSplitter
+
 import csv
 from math import ceil
 
@@ -38,7 +40,7 @@ from math import ceil
 
 
 
-def learn(dataset_X, dataset_y, window_size=None):
+def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     """
     Learn LSTM model on dataset
     Args:
@@ -55,15 +57,19 @@ def learn(dataset_X, dataset_y, window_size=None):
         window_size = dataset_X.shape[1]
     model = Sequential()
     #batch_size, (time_steps, units)
-    model.add(LSTM(units = 50, input_shape = (window_size, N_features)))
+    model.add(LSTM(units = 50, activation="tanh", recurrent_activation="sigmoid", input_shape = (window_size, N_features)))
     model.add(Dense(N_features))
-    model.compile(optimizer='adam', loss='mae') #, metrics=[MeanAbsoluteError()]) #loss=mae ?
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss='mae') #, metrics=[MeanAbsoluteError()]) #loss=mae ?
     # plot_model(model, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
     # model.summary()
-    batch_size = 128
+    batch_size = 64
     # history = model.fit(Datagen(dataset, batch_size=batch_size, window_size=window_size), \
     #         epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
-    history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
+    if valid_X is not None:
+        my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2)
+        history = model.fit(dataset_X, dataset_y, epochs=10, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
+    else:
+        history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=True, verbose=1) # validation_data=(test_X, test_y)
     return model, history
 
 
@@ -85,7 +91,7 @@ def create_windows(data, window_size=1):
     for i in range(window_size): 
         windows[:, i, :] = np.roll(data, -i, axis=0)
     answers = data[window_size:, ...]
-    return windows[window_size:, ...], answers #:data.shape[0] - window_size
+    return windows[:-window_size, ...], answers #:data.shape[0] - window_size
 
 
 class MyStandardScaler:
@@ -104,16 +110,29 @@ class MyStandardScaler:
 
 
     def transform(self, data):
-        eps=1e-8
+        if isinstance(data, np.ndarray):
+            data = [data]
+        eps=1e-10
         result_data = []
         for i in range(len(data)):
             result_data.append(np.diff(data[i], axis=0))
             result_data[i] = (result_data[i] - self.mean) / np.maximum(self.std, eps)
+        return result_data 
+
+    def inverse_transform(self, data, dif=True):
+        if isinstance(data, np.ndarray):
+            data = [data]
+        result_data = []
+        for i in range(len(data)):
+            result_data.append(data[i] * self.std + self.mean)
+            # print(f"{result_data[i].shape}")
+            if dif:
+                result_data[i] = np.concatenate([np.zeros((1, result_data[i].shape[1])), result_data[i]], axis=0).cumsum(axis=0) #add first element
         return result_data
 
 
 
-def split_to_train_test(dataset_X, dataset_y, percent_of_test=20):
+def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2):
     """
     Args:
         dataset_X (list of ndarrays) or (ndarray): ..., (M, W, Q)
@@ -126,20 +145,40 @@ def split_to_train_test(dataset_X, dataset_y, percent_of_test=20):
         result_train_X, result_train_y, result_test_X, result_test_y = np.zeros((1, W, Q)), \
                 np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q))
         for X, y in zip(dataset_X, dataset_y):
-            train_X, train_y, test_X, test_y = split_to_train_test(X, y, percent_of_test=percent_of_test)
+            train_X, train_y, test_X, test_y = split_to_train_test(X, y, part_of_test=part_of_test)
             result_train_X = np.concatenate([result_train_X, train_X])
             result_train_y = np.concatenate([result_train_y, train_y])
             result_test_X = np.concatenate([result_test_X, test_X])
             result_test_y = np.concatenate([result_test_y, test_y])
         # print(f"In the end split: {result_test_X.shape=}, {result_test_y.shape=}")
         return result_train_X[1:, ...], result_train_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...]
-    n_split = round((1 - percent_of_test/ 100) * dataset_X.shape[0])
+    n_split = round((1 - part_of_test) * dataset_X.shape[0])
     train_X = dataset_X[:n_split, ...]
     train_y = dataset_y[:n_split, ...]
     test_X = dataset_X[n_split:, ...]
     test_y = dataset_y[n_split:, ...]
     # print(f"In split: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}")
     return train_X, train_y, test_X, test_y
+
+
+# def 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #no....

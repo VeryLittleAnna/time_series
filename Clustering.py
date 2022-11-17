@@ -16,7 +16,8 @@ def KMeans_for_windows(dataset, W=5, N_clusters=8, max_iter=200):
         windows = np.array([dataset[i:i+W].flatten() for i in range(dataset.shape[0] - W)])
     else:
         windows = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
-    
+    if N_clusters == 1:
+        return np.zeros((windows.shape[0]), dtype=np.int8)
     model = KMeans(n_clusters=N_clusters, max_iter=max_iter, init='random') #n_jobs ??
     res = model.fit_predict(windows)
     return res
@@ -46,3 +47,16 @@ def flatten_from_interceting_windows(dataset, labels, N_clusters=None, W=1):
         # print(f"{tmp.shape=}, {cluster_num=}, {len(dataset_result)=}, {np.max(labels)=}")
         dataset_result[cluster_num].append(tmp.reshape(tmp.shape[0] * tmp.shape[1], tmp.shape[2]))
     return dataset_result
+
+def create_segments(data, segment_size=1):
+    """
+    Args:
+        data (ndarray): (N, Q)
+    return segments (N // segment_size, segment, Q)
+    """
+    if isinstance(data, list):
+        return [create_segments(part, segment_size=segment_size) for part in data]
+    N, Q = data.shape
+    data = data[:N - N % segment_size, ...]
+    segments = data.reshape(N // segment_size, segment_size, Q)
+    return segments
