@@ -221,6 +221,7 @@ def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2, part_of_valid=No
                 train_X, train_y, test_X, test_y, ind = split_to_train_test(X, y, part_of_test=part_of_test)
             else:
                 train_X, train_y, valid_X, valid_y, test_X, test_y, ind = split_to_train_test(X, y, part_of_test=part_of_test, part_of_valid=part_of_valid)
+                print(f"    IN SPLIT: {train_X.shape=}, {valid_X.shape=}, {test_X.shape=}")
             indices += ind
             result_train_X = np.concatenate([result_train_X, train_X])
             result_train_y = np.concatenate([result_train_y, train_y])
