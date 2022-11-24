@@ -16,6 +16,45 @@ from sktime.forecasting.model_selection import SlidingWindowSplitter
 import csv
 from math import ceil
 
+eps=1e-10
+
+
+
+def my_mase(y_true, y_pred, multioutput='raw_values'):
+    numer = my_mae(y_true, y_pred, multioutput='raw_values')
+    denom = mae_naive(y_true, multioutput='raw_values')
+    cur_mase = numer / np.maximum(denom, eps)
+    if multioutput == 'uniform_average':
+        return np.mean(cur_mase)
+    return cur_mase
+
+
+def my_mae(y_true, y_pred, multioutput='raw_values'):
+    cur_mae = np.mean(np.abs(y_pred - y_true), axis=0)
+    if multioutput == 'uniform_average':
+        return np.mean(cur_mae)
+    elif multioutput == 'raw_values':
+        return cur_mae
+    else:
+        assert(False)
+
+
+def mae_naive(data, multioutput='raw_values'):
+    """
+    Args:
+        data : list of ndarray (Ni_samples, N_features)
+    """
+    if isinstance(data, np.ndarray):
+        data = [data]
+    cnt = sum([part.shape[0] - 1 for part in data]) * data[0].shape[1]
+    cur_mae = np.sum(np.row_stack([np.array(np.sum(np.abs(part[1:, ...] - part[:-1, ...]), axis=0)) for part in data]), axis=0)
+    if multioutput == 'raw_values':
+        return cur_mae / cnt
+    elif multioutput == 'uniform_average':
+        return np.sum(cur_mae) / cnt / cur_mae.shape[0]
+    else:
+        assert(False)
+
 # class Datagen(keras.utils.Sequence):
 #     def __init__(self, X, batch_size=1, window_size=1):
 #         #X: list of (N_i_samples, N_features)
@@ -59,7 +98,7 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     #batch_size, (time_steps, units)
     model.add(LSTM(units = 50, activation="tanh", recurrent_activation="sigmoid", input_shape = (window_size, N_features)))
     model.add(Dense(N_features))
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss='mae') #, metrics=[MeanAbsoluteError()]) #loss=mae ?
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss='mae', run_eagerly=True) #, metrics=[MeanAbsoluteError()]) #loss=mae ?
     # plot_model(model, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
     # model.summary()
     batch_size = 64
@@ -67,7 +106,7 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     #         epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
     if valid_X is not None:
         my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2)
-        history = model.fit(dataset_X, dataset_y, epochs=10, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
+        history = model.fit(dataset_X, dataset_y, epochs=40, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
     else:
         history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=True, verbose=1) # validation_data=(test_X, test_y)
     return model, history
@@ -100,6 +139,7 @@ class MyStandardScaler:
     def fit(self, data):
         if isinstance(data, np.ndarray):
             data = [data]
+        self.original_data = data
         self.data = []
         for i in range(len(data)):
             self.data.append(np.diff(data[i], axis=0))
@@ -112,7 +152,6 @@ class MyStandardScaler:
     def transform(self, data):
         if isinstance(data, np.ndarray):
             data = [data]
-        eps=1e-10
         result_data = []
         for i in range(len(data)):
             result_data.append(np.diff(data[i], axis=0))
@@ -120,6 +159,12 @@ class MyStandardScaler:
         return result_data 
 
     def inverse_transform(self, data, dif=True):
+        """
+        Args:
+            data - list of ndarrays: (N_i_samples, N_features)
+        Returns:
+            result_data - list of ndarrays (N_i_samples, N_features)
+        """
         if isinstance(data, np.ndarray):
             data = [data]
         result_data = []
@@ -128,70 +173,76 @@ class MyStandardScaler:
             # print(f"{result_data[i].shape}")
             if dif:
                 result_data[i] = np.concatenate([np.zeros((1, result_data[i].shape[1])), result_data[i]], axis=0).cumsum(axis=0) #add first element
+                result_data[i] = result_data[i][1:, ...] #delete first zeroes
         return result_data
 
+    # def add_first_element(self, data, window_size=1, part_of_test=0.2):
+    #     """
+    #     original_data - list of ndarrays (N_samples, N_features) - test_y
+    #     data - 
+    #     """
+    #     if isinstance(data, np.ndarray):
+    #         data = [data]
+    #     answer = []
+    #     for i in range(len(data)):
+    #         n = self.original_data[i].shape[0]
+    #         print(int((n - 1 - window_size) * (1 - part_of_test)))
+    #         answer.append(self.original_data[i][int((n - 1 - window_size) * (1 - part_of_test)), ...])
+    #     return answer
+
+    def add_first_element(self, data, ind, window_size=1):
+        """
+        """
+        if isinstance(data, np.ndarray):
+            data = [data]
+        for i in range(len(data)):
+            data[i] += self.original_data[i][ind[i]]
+        return data
 
 
-def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2):
+
+
+def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2, part_of_valid=None):
     """
     Args:
         dataset_X (list of ndarrays) or (ndarray): ..., (M, W, Q)
         ...
     Returns:
         dataset_X (ndarray): (M_sum_train, W, Q), ...
+        indices_of_test_starts
     """
     if isinstance(dataset_X, list):
         W, Q = dataset_X[0].shape[1:3]
-        result_train_X, result_train_y, result_test_X, result_test_y = np.zeros((1, W, Q)), \
-                np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q))
+        result_train_X, result_train_y, result_test_X, result_test_y, result_valid_X, result_valid_y = np.zeros((1, W, Q)), \
+                np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q))
+        indices = []
         for X, y in zip(dataset_X, dataset_y):
-            train_X, train_y, test_X, test_y = split_to_train_test(X, y, part_of_test=part_of_test)
+            if part_of_valid == None:
+                train_X, train_y, test_X, test_y, ind = split_to_train_test(X, y, part_of_test=part_of_test)
+            else:
+                train_X, train_y, valid_X, valid_y, test_X, test_y, ind = split_to_train_test(X, y, part_of_test=part_of_test, part_of_valid=part_of_valid)
+            indices += ind
             result_train_X = np.concatenate([result_train_X, train_X])
             result_train_y = np.concatenate([result_train_y, train_y])
             result_test_X = np.concatenate([result_test_X, test_X])
             result_test_y = np.concatenate([result_test_y, test_y])
-        # print(f"In the end split: {result_test_X.shape=}, {result_test_y.shape=}")
-        return result_train_X[1:, ...], result_train_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...]
+            if part_of_valid != None:
+                result_valid_X = np.concatenate([result_valid_X, valid_X])
+                result_valid_y = np.concatenate([result_valid_y, valid_y])
+                return result_train_X[1:, ...], result_train_y[1:, ...], result_valid_X[1:, ...], result_valid_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...], indices
+            else:
+                return result_train_X[1:, ...], result_train_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...], indices
     n_split = round((1 - part_of_test) * dataset_X.shape[0])
-    train_X = dataset_X[:n_split, ...]
-    train_y = dataset_y[:n_split, ...]
     test_X = dataset_X[n_split:, ...]
     test_y = dataset_y[n_split:, ...]
-    # print(f"In split: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}")
-    return train_X, train_y, test_X, test_y
-
-
-# def 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#no....
-def create_train_test_in_clusters(dataset_X, dataset_y, cluster_labels, N_clusters):
-    clusters_data_X = [dataset_X[cluster_labels == k] for k in range(N_clusters)]
-    clusters_data_y = [dataset_y[cluster_labels == k] for k in range(N_clusters)]
-    clusters_train_X, clusters_train_y = [], []
-    clusters_test_X, clusters_test_y = [], []
-    for i in range(N_clusters):
-        train_X, train_y, test_X, test_y = split_to_train_test(clusters_data_X[i], clusters_data_y[i])
-        clusters_train_X.append(train_X)
-        clusters_train_y.append(train_y)
-        clusters_test_X.append(test_X)
-        clusters_test_y.append(test_y)
-    return clusters_train_X, clusters_train_y, clusters_test_X, clusters_test_y
+    if part_of_valid == None:
+        train_X = dataset_X[:n_split, ...]
+        train_y = dataset_y[:n_split, ...]
+        return train_X, train_y, test_X, test_y, [n_split]
+    valid_n_split = round((1 - part_of_test - part_of_valid) * dataset_X.shape[0])
+    valid_X = dataset_X[valid_n_split:n_split, ...]
+    valid_y = dataset_y[valid_n_split:n_split, ...]
+    train_X = dataset_X[:valid_n_split, ...]
+    train_y = dataset_y[:valid_n_split, ...]
+    return train_X, train_y, valid_X, valid_y, test_X, test_y, [n_split]
 
