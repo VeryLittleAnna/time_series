@@ -22,7 +22,10 @@ eps=1e-10
 
 def my_mase(y_true, y_pred, multioutput='raw_values'):
     numer = my_mae(y_true, y_pred, multioutput='raw_values')
-    denom = mae_naive(y_true, multioutput='raw_values')
+    if y_true.shape[0] == 1:
+        denom = 1
+    else:
+        denom = mae_naive(y_true, multioutput='raw_values')
     cur_mase = numer / np.maximum(denom, eps)
     if multioutput == 'uniform_average':
         return np.mean(cur_mase)
@@ -122,6 +125,9 @@ def create_windows(data, window_size=1):
         result_windows, result_answers = [], []
         for part in data:
             part_windows, part_answers = create_windows(part, window_size=window_size)
+#             assert(part_windows.shape[0] > 0 and len(part_windows.shape) == 3)
+            if part_windows.shape[0] == 0 or len(part_windows.shape) == 2:
+                part_windows = part_answers = None
             result_windows.append(part_windows)
             result_answers.append(part_answers)
         return result_windows, result_answers
@@ -134,15 +140,18 @@ def create_windows(data, window_size=1):
 
 
 class MyStandardScaler:
-    def __init__(self):
-        pass
+    def __init__(self, dif=True):
+        self.dif_flag = dif
     def fit(self, data):
         if isinstance(data, np.ndarray):
             data = [data]
         self.original_data = data
         self.data = []
         for i in range(len(data)):
-            self.data.append(np.diff(data[i], axis=0))
+            if self.dif_flag:
+                self.data.append(np.diff(data[i], axis=0))
+            else:
+                self.data.append(data[i])
         cur_sum = np.sum(np.row_stack([np.sum(part, axis=0) for part in self.data]), axis=0)
         cur_cnt = sum([part.shape[0] for part in self.data])
         self.mean = cur_sum / cur_cnt
@@ -154,11 +163,14 @@ class MyStandardScaler:
             data = [data]
         result_data = []
         for i in range(len(data)):
-            result_data.append(np.diff(data[i], axis=0))
+            if self.dif_flag:
+                result_data.append(np.diff(data[i], axis=0))
+            else:
+                result_data.append(data[i])
             result_data[i] = (result_data[i] - self.mean) / np.maximum(self.std, eps)
         return result_data 
 
-    def inverse_transform(self, data, dif=True):
+    def inverse_transform(self, data):
         """
         Args:
             data - list of ndarrays: (N_i_samples, N_features)
@@ -171,7 +183,7 @@ class MyStandardScaler:
         for i in range(len(data)):
             result_data.append(data[i] * self.std + self.mean)
             # print(f"{result_data[i].shape}")
-            if dif:
+            if self.dif_flag:
                 result_data[i] = np.concatenate([np.zeros((1, result_data[i].shape[1])), result_data[i]], axis=0).cumsum(axis=0) #add first element
                 result_data[i] = result_data[i][1:, ...] #delete first zeroes
         return result_data
@@ -193,10 +205,7 @@ class MyStandardScaler:
     def add_first_element(self, data, ind, window_size=1):
         """
         """
-        if isinstance(data, np.ndarray):
-            data = [data]
-        for i in range(len(data)):
-            data[i] += self.original_data[i][ind[i]]
+        data += self.original_data[ind]
         return data
 
 
@@ -212,34 +221,43 @@ def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2, part_of_valid=No
         indices_of_test_starts
     """
     if isinstance(dataset_X, list):
-        W, Q = dataset_X[0].shape[1:3]
-        result_train_X, result_train_y, result_test_X, result_test_y, result_valid_X, result_valid_y = np.zeros((1, W, Q)), \
-                np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q))
-        indices = []
+        for i in range(len(dataset_X)):
+            if dataset_X[i] is not None:
+                W, Q = dataset_X[i].shape[1:3]
+                break
+        else:
+            return None
+        result_train_X, result_train_y, result_test_X, result_test_y, result_valid_X, result_valid_y, test_ind = np.zeros((1, W, Q)), \
+                np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q)), np.zeros((1, W, Q)), np.zeros((1, Q)), np.zeros((1))
+        cur_pos = 0
         for X, y in zip(dataset_X, dataset_y):
-            if part_of_valid == None:
+            if X is None:
+                continue
+            if part_of_valid is None:
                 train_X, train_y, test_X, test_y, ind = split_to_train_test(X, y, part_of_test=part_of_test)
             else:
                 train_X, train_y, valid_X, valid_y, test_X, test_y, ind = split_to_train_test(X, y, part_of_test=part_of_test, part_of_valid=part_of_valid)
-                print(f"    IN SPLIT: {train_X.shape=}, {valid_X.shape=}, {test_X.shape=}")
-            indices += ind
+#                 print(f"    IN SPLIT: {train_X.shape=}, {valid_X.shape=}, {test_X.shape=}. {X.shape=}, {y.shape=}") 
+            test_ind = np.concatenate([test_ind, ind])
             result_train_X = np.concatenate([result_train_X, train_X])
             result_train_y = np.concatenate([result_train_y, train_y])
             result_test_X = np.concatenate([result_test_X, test_X])
             result_test_y = np.concatenate([result_test_y, test_y])
-            if part_of_valid != None:
+            cur_pos += X.shape[0] + 1
+            if part_of_valid is not None:
                 result_valid_X = np.concatenate([result_valid_X, valid_X])
                 result_valid_y = np.concatenate([result_valid_y, valid_y])
-                return result_train_X[1:, ...], result_train_y[1:, ...], result_valid_X[1:, ...], result_valid_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...], indices
+                return result_train_X[1:, ...], result_train_y[1:, ...], result_valid_X[1:, ...], result_valid_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...], test_ind[1:]
             else:
-                return result_train_X[1:, ...], result_train_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...], indices
+                return result_train_X[1:, ...], result_train_y[1:, ...], result_test_X[1:, ...], result_test_y[1:, ...], test_ind[1:]
     n_split = round((1 - part_of_test) * dataset_X.shape[0])
     test_X = dataset_X[n_split:, ...]
     test_y = dataset_y[n_split:, ...]
-    if part_of_valid == None:
+    test_ind = np.arange(n_split, dataset_y.shape[0])
+    if part_of_valid is None:
         train_X = dataset_X[:n_split, ...]
         train_y = dataset_y[:n_split, ...]
-        return train_X, train_y, test_X, test_y, [n_split]
+        return train_X, train_y, test_X, test_y, test_ind
     valid_n_split = round((1 - part_of_test - part_of_valid) * dataset_X.shape[0])
     valid_X = dataset_X[valid_n_split:n_split, ...]
     valid_y = dataset_y[valid_n_split:n_split, ...]
