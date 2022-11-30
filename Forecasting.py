@@ -142,10 +142,11 @@ def create_windows(data, window_size=1):
 class MyStandardScaler:
     def __init__(self, dif=True):
         self.dif_flag = dif
+
     def fit(self, data):
         if isinstance(data, np.ndarray):
             data = [data]
-        self.original_data = data
+        # self.original_data = data
         self.data = []
         for i in range(len(data)):
             if self.dif_flag:
