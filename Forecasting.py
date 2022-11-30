@@ -108,7 +108,7 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     # history = model.fit(Datagen(dataset, batch_size=batch_size, window_size=window_size), \
     #         epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
     if valid_X is not None:
-        my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2)
+        my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2, restore_best_weights=True)
         history = model.fit(dataset_X, dataset_y, epochs=40, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
     else:
         history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=True, verbose=1) # validation_data=(test_X, test_y)
