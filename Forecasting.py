@@ -6,6 +6,8 @@ from keras.models import Sequential
 from keras.layers import Dense
 from keras.layers import LSTM
 from keras.metrics import MeanAbsoluteError, MeanSquaredError
+from sklearn.metrics import mean_absolute_percentage_error as mape
+from sklearn.metrics import mean_absolute_error as mae
 import tensorflow as tf
 # from tensorflow.keras.losses import MeanAbsoluteError
 import pandas as pd
@@ -15,6 +17,11 @@ from sktime.forecasting.model_selection import SlidingWindowSplitter
 
 import csv
 from math import ceil
+import json
+import csv
+import pickle
+import Clustering
+
 
 eps=1e-10
 
@@ -57,6 +64,14 @@ def mae_naive(data, multioutput='raw_values'):
         return np.sum(cur_mae) / cnt / cur_mae.shape[0]
     else:
         assert(False)
+
+
+def calc_metrics(y_true, y_pred):
+    # metrics = ["mae", "mape", "mase"]
+    cur_mae = mae(y_true, y_pred, multioutput='raw_values')
+    cur_mape = mape(y_true, y_pred, multioutput='raw_values')
+    cur_mase = my_mase(y_true, y_pred, multioutput='raw_values')
+    return {"mae":cur_mae, "mape":cur_mape, "mase":cur_mase}
 
 # class Datagen(keras.utils.Sequence):
 #     def __init__(self, X, batch_size=1, window_size=1):
@@ -109,10 +124,67 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     #         epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
     if valid_X is not None:
         my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2, restore_best_weights=True)
-        history = model.fit(dataset_X, dataset_y, epochs=40, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
+        history = model.fit(dataset_X, dataset_y, epochs=1, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
     else:
         history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=True, verbose=1) # validation_data=(test_X, test_y)
     return model, history
+
+
+def try_parameters(parameters, dataset):
+    """
+    Args:
+        parameters (dict): dict with keys from {N_clusters, window_size_for_clustering, dif}
+    """
+    best_model_mape, best_model_mase = None, None
+    best_model_mape_metric, best_model_mase_metric = None, None
+    answer = {}
+    for window_size in parameters["window_size_for_clustering"]:
+        for N_clusters in parameters["N_clusters"]:
+            dataset_windows, dataset_y = create_windows(dataset, window_size=window_size)
+            print(f"{dataset_windows.shape=}")
+            clusters_labels = Clustering.KMeans_for_windows(dataset_windows, W=window_size, N_clusters=N_clusters, max_iter=1)
+            cluster_metrics = Clustering.calc_clusters_metrics(dataset_windows, clusters_labels)
+            datasets_clusters = Clustering.split_to_clusters(dataset, clusters_labels, W=window_size)
+            metrics = [0] * N_clusters
+            for cluster_num in range(N_clusters):
+                sc = MyStandardScaler()
+                #datasets_clusters[cluster_num] - list of [N_i, Q] ndarrays
+                sc.fit(datasets_clusters[cluster_num])
+                prepared_data = sc.transform(datasets_clusters[cluster_num])
+                data_X, data_y = create_windows(prepared_data, window_size=10)
+                #data_X - list of [N_i-W, W, Q] ndarrays
+                train_X, train_y, valid_X, valid_y, test_X, test_y, ind = split_to_train_test(data_X, data_y, part_of_test=0.2, part_of_valid=0.2)
+                #ndarrays [N_i, W, Q] or [N_i, Q]
+                ind = np.array(ind) + window_size
+                print(f"Before prediction: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}")
+                try:
+                    assert(len(test_X.shape) == 3 and test_X.shape[0] > 0)
+                    assert(len(valid_X.shape) == 3 and valid_X.shape[0] > 0)
+                    assert(len(train_X.shape) == 3 and train_X.shape[0] > 0)
+                except AssertionError:
+                    print(f"FAIL - {test_X.shape=}, {valid_X.shape=}, {train_X.shape=}")
+                    tmp = np.array([np.inf] * dataset.shape[-1])
+                    metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
+                    continue
+                model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
+                predicted = model.predict(test_X)
+                predicted_original = sc.inverse_transform(predicted)[0]
+                metrics[cluster_num] = calc_metrics(test_y, predicted_original)
+            clusters_sizes = np.array([np.sum(clusters_labels == i) for i in range(N_clusters)])
+            weighted_mase = np.average(np.row_stack([metrics[i]["mase"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+            weighted_mape = np.average(np.row_stack([metrics[i]["mape"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+            if best_model_mape is None or np.mean(weighted_mape) < best_model_mape_metric:
+                best_model_mape_metric = np.mean(weighted_mape)
+                best_model_mape = model
+            if best_model_mase is None or np.mean(weighted_mase) < best_model_mase_metric:
+                best_model_mase_metric = np.mean(weighted_mase)
+                best_model_mase = model
+            answer[(window_size, N_clusters)] = ["str cluster_metrics metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
+                    metrics, clusters_sizes, weighted_mase, weighted_mape]
+    output = open('output_metrics.pickle', 'wb')
+    pickle.dump(answer, output)
+    output.close()
+    return (best_model_mape, best_model_mape_metric), (best_model_mase, best_model_mase_metric)
 
 
 def create_windows(data, window_size=1):

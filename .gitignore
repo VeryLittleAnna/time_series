@@ -12,3 +12,7 @@
 *.m
 
 *.pdf
+__pycache__/
+*.py[cod]
+
+test.ipynb

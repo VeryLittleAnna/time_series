@@ -5,6 +5,7 @@ import csv
 
 from sklearn.cluster import KMeans
 from collections import defaultdict
+from sklearn.metrics import davies_bouldin_score
 
 
 N_clusters=5
@@ -47,6 +48,34 @@ def flatten_from_interceting_windows(dataset, labels, N_clusters=None, W=1):
         # print(f"{tmp.shape=}, {cluster_num=}, {len(dataset_result)=}, {np.max(labels)=}")
         dataset_result[cluster_num].append(tmp.reshape(tmp.shape[0] * tmp.shape[1], tmp.shape[2]))
     return dataset_result
+
+def split_to_clusters(dataset, labels, W=1):
+    print(f"In split_to_clusters: {len(dataset)=}, {(len(labels) + W)=}")
+    assert(len(dataset) == (len(labels) + W))
+    N_clusters = np.max(np.array(labels)) + 1
+    dataset_result = [[] for i in range(N_clusters)]
+    i, start = 0, 0
+    while i < len(labels):
+        j = i
+        while j < len(labels) and labels[j] == labels[i]:
+            j +=1
+        dataset_result[labels[i]].append(dataset[i:j + W - 1, ...])
+        i = j
+    return dataset_result
+
+
+def calc_clusters_metrics(dataset, labels, centroids=None):
+    """
+    dataset - windows
+    Returns:
+        Davies-Bouldin Index
+    """
+    if len(dataset.shape) == 3:
+        dataset = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
+    answer = {}
+    answer["DB"] = davies_bouldin_score(dataset, labels)
+    # dist_in = np.array([labels[i] == k for i in range(len(labels)) for k in range N_clusters])
+    return answer
 
 def create_segments(data, segment_size=1):
     """
