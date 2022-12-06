@@ -124,7 +124,7 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     #         epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
     if valid_X is not None:
         my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2, restore_best_weights=True)
-        history = model.fit(dataset_X, dataset_y, epochs=1, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
+        history = model.fit(dataset_X, dataset_y, epochs=40, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
     else:
         history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=True, verbose=1) # validation_data=(test_X, test_y)
     return model, history
@@ -142,7 +142,7 @@ def try_parameters(parameters, dataset):
         for N_clusters in parameters["N_clusters"]:
             dataset_windows, dataset_y = create_windows(dataset, window_size=window_size)
             print(f"{dataset_windows.shape=}")
-            clusters_labels = Clustering.KMeans_for_windows(dataset_windows, W=window_size, N_clusters=N_clusters, max_iter=1)
+            clusters_labels = Clustering.KMeans_for_windows(dataset_windows, W=window_size, N_clusters=N_clusters, max_iter=50)
             cluster_metrics = Clustering.calc_clusters_metrics(dataset_windows, clusters_labels)
             datasets_clusters = Clustering.split_to_clusters(dataset, clusters_labels, W=window_size)
             metrics = [0] * N_clusters
