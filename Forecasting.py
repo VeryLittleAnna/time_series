@@ -25,8 +25,8 @@ import Clustering
 from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-10
-MAX_ITERS_KMEANS = 1
-MAX_EPOCHS = 1
+MAX_ITERS_KMEANS = 50
+MAX_EPOCHS = 20
 
 
 def my_mase(y_true, y_pred, multioutput='raw_values'):
@@ -237,7 +237,8 @@ class MyStandardScaler:
 
 
     def transform(self, data):
-        if isinstance(data, np.ndarray):
+        print("In transform")
+        if isinstance(data, np.ndarray) and len(data.shape) == 2:
             data = [data]
         result_data = []
         for i in range(len(data)):
@@ -246,6 +247,7 @@ class MyStandardScaler:
             else:
                 result_data.append(data[i])
             result_data[i] = (result_data[i] - self.mean) / np.maximum(self.std, eps)
+        print(f" -> in transform: {len(result_data)=}, {result_data[0].shape=}")
         return result_data 
 
     def inverse_transform(self, data):
@@ -357,18 +359,33 @@ def predict_through_clusters(dataset, clusters_model, prediction_models, scalers
     # dataset_windows = sliding_window_view(dataset, (window_size_clustering, dataset.shape[-1]))
     dataset_windows = np.array([dataset[i:i+window_size_clustering].flatten() for i in range(dataset.shape[0] - window_size_clustering)])
     cluster_nums = clusters_model.predict(dataset_windows)
-    print(f"{dataset.shape=}, {dataset_windows.shape=}, {cluster_nums=}")
-    cluster_nums = np.pad(cluster_nums, (dataset.shape[0] - dataset_windows.shape[0]), mode='constant', constant_values=(cluster_nums[0])) #-1
+    print(f"{dataset.shape=}, {dataset_windows.shape=}, {cluster_nums.shape=}, {dataset.shape[0] - dataset_windows.shape[0]}")
+    cluster_nums = np.pad(cluster_nums, (dataset.shape[0] - dataset_windows.shape[0], 0), mode='constant', constant_values=(cluster_nums[0])) #-1
+    print(f"After pad: {dataset.shape=}, {cluster_nums.shape=}")
     # if window_size_clustering > window_size_forecasting:
     #     cluster_num = np.pad(cluster_nums, (0, ), mode='constant', constant_values=(cluster_nums[-1]))
     y_pred = np.zeros((dataset.shape[0] - window_size_forecasting, dataset.shape[-1]))
-    print(f"{dataset.shape=}")
+    #only if dif then +1
     dataset_windows = sliding_window_view(dataset, (window_size_forecasting + 1, dataset.shape[-1]))
     print(f"{dataset_windows.shape=}")
-    for i in range(y_pred.shape[0]):
-        cur_cluster_num = cluster_nums[i + window_size_forecasting]
-        window = scalers[cur_cluster_num].transform(dataset_windows[i, 0])[0]
-        cur_pred = np.array(prediction_models[cur_cluster_num](window[None, ...]))
-        cur_pred = scalers[cur_cluster_num].inverse_transform(cur_pred)[0] + dataset_windows[i, 0, 0]
-        y_pred[i] = cur_pred
+    cluster_nums = cluster_nums[window_size_forecasting:]
+    print(f"{cluster_nums.shape=}")
+    for N in range(N_clusters):
+        mask = (cluster_nums == N)
+        if np.sum(mask) == 0:
+            continue
+        
+        cur_windows = dataset_windows[mask, 0, ...] #(M, Wf, Q)
+        print(f"{cur_windows.shape=}")
+        if isinstance(prediction_models[N], int):
+            #too small cluster to create model
+            y_pred[mask] = clusters_model.cluster_centers_[N][-dataset.shape[-1]:]
+            continue
+        
+        print(f"{N=}, {len(scalers)=}")
+        cur_windows = np.array(scalers[N].transform(cur_windows))
+        print(f"{cur_windows.shape=}")        
+        cur_pred = np.array(prediction_models[N](cur_windows)) #(M, Q)
+        cur_pred = scalers[N].inverse_transform(cur_pred)[0] + cur_windows[:, 0, :]
+        y_pred[mask] = cur_pred
     return y_pred
