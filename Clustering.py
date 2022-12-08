@@ -21,7 +21,7 @@ def KMeans_for_windows(dataset, W=5, N_clusters=8, max_iter=200):
         return np.zeros((windows.shape[0]), dtype=np.int8)
     model = KMeans(n_clusters=N_clusters, max_iter=max_iter, init='random') #n_jobs ??
     res = model.fit_predict(windows)
-    return res
+    return model
 
 def flatten_from_interceting_windows(dataset, labels, N_clusters=None, W=1):
     """

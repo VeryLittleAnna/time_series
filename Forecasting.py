@@ -22,9 +22,11 @@ import csv
 import pickle
 import Clustering
 
+from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-10
-
+MAX_ITERS_KMEANS = 1
+MAX_EPOCHS = 1
 
 
 def my_mase(y_true, y_pred, multioutput='raw_values'):
@@ -124,7 +126,7 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     #         epochs=10, batch_size=batch_size, shuffle=False, verbose=1) # validation_data=(test_X, test_y)
     if valid_X is not None:
         my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2, restore_best_weights=True)
-        history = model.fit(dataset_X, dataset_y, epochs=40, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
+        history = model.fit(dataset_X, dataset_y, epochs=MAX_EPOCHS, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
     else:
         history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=True, verbose=1) # validation_data=(test_X, test_y)
     return model, history
@@ -135,22 +137,27 @@ def try_parameters(parameters, dataset):
     Args:
         parameters (dict): dict with keys from {N_clusters, window_size_for_clustering, dif}
     """
-    best_model_mape, best_model_mase = None, None
-    best_model_mape_metric, best_model_mase_metric = None, None
+    best_model_mase, best_clusters_model = None, None
+    best_model = {}
     answer = {}
     for window_size in parameters["window_size_for_clustering"]:
         for N_clusters in parameters["N_clusters"]:
             dataset_windows, dataset_y = create_windows(dataset, window_size=window_size)
             print(f"{dataset_windows.shape=}")
-            clusters_labels = Clustering.KMeans_for_windows(dataset_windows, W=window_size, N_clusters=N_clusters, max_iter=50)
+            clusters_model = Clustering.KMeans_for_windows(dataset_windows, W=window_size, N_clusters=N_clusters, max_iter=MAX_ITERS_KMEANS)
+            clusters_labels = clusters_model.labels_
+            centroids = clusters_model.cluster_centers_
             cluster_metrics = Clustering.calc_clusters_metrics(dataset_windows, clusters_labels)
             datasets_clusters = Clustering.split_to_clusters(dataset, clusters_labels, W=window_size)
             metrics = [0] * N_clusters
+            cur_models = [0] * N_clusters
+            scalers = [0] * N_clusters
             for cluster_num in range(N_clusters):
                 sc = MyStandardScaler()
                 #datasets_clusters[cluster_num] - list of [N_i, Q] ndarrays
                 sc.fit(datasets_clusters[cluster_num])
                 prepared_data = sc.transform(datasets_clusters[cluster_num])
+                scalers[cluster_num] = sc
                 data_X, data_y = create_windows(prepared_data, window_size=10)
                 #data_X - list of [N_i-W, W, Q] ndarrays
                 train_X, train_y, valid_X, valid_y, test_X, test_y, ind = split_to_train_test(data_X, data_y, part_of_test=0.2, part_of_valid=0.2)
@@ -170,21 +177,19 @@ def try_parameters(parameters, dataset):
                 predicted = model.predict(test_X)
                 predicted_original = sc.inverse_transform(predicted)[0]
                 metrics[cluster_num] = calc_metrics(test_y, predicted_original)
+                cur_models[cluster_num] = model
             clusters_sizes = np.array([np.sum(clusters_labels == i) for i in range(N_clusters)])
             weighted_mase = np.average(np.row_stack([metrics[i]["mase"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
             weighted_mape = np.average(np.row_stack([metrics[i]["mape"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
-            if best_model_mape is None or np.mean(weighted_mape) < best_model_mape_metric:
-                best_model_mape_metric = np.mean(weighted_mape)
-                best_model_mape = model
-            if best_model_mase is None or np.mean(weighted_mase) < best_model_mase_metric:
-                best_model_mase_metric = np.mean(weighted_mase)
-                best_model_mase = model
-            answer[(window_size, N_clusters)] = ["str cluster_metrics metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
-                    metrics, clusters_sizes, weighted_mase, weighted_mape]
+            if best_model_mase is None or np.mean(weighted_mase) < best_model_mase:
+                best_model_mase = np.mean(weighted_mase)
+                best_model = {'models':cur_models[:], "scalers":scalers, 'clusters_model':clusters_model}
+            answer[(window_size, N_clusters)] = ["str cluster_metrics clusters_model metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
+                    clusters_model, metrics, clusters_sizes, weighted_mase, weighted_mape]
     output = open('output_metrics.pickle', 'wb')
     pickle.dump(answer, output)
     output.close()
-    return (best_model_mape, best_model_mape_metric), (best_model_mase, best_model_mase_metric)
+    return best_model, best_model_mase
 
 
 def create_windows(data, window_size=1):
@@ -257,7 +262,7 @@ class MyStandardScaler:
             result_data.append(data[i] * self.std + self.mean)
             # print(f"{result_data[i].shape}")
             if self.dif_flag:
-                result_data[i] = np.concatenate([np.zeros((1, result_data[i].shape[1])), result_data[i]], axis=0).cumsum(axis=0) #add first element
+                result_data[i] = np.concatenate([np.zeros((1, result_data[i].shape[1])), result_data[i]], axis=0).cumsum(axis=0) #undif
                 result_data[i] = result_data[i][1:, ...] #delete first zeroes
         return result_data
 
@@ -280,8 +285,6 @@ class MyStandardScaler:
         """
         data += self.original_data[ind]
         return data
-
-
 
 
 def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2, part_of_valid=None):
@@ -338,3 +341,34 @@ def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2, part_of_valid=No
     train_y = dataset_y[:valid_n_split, ...]
     return train_X, train_y, valid_X, valid_y, test_X, test_y, [n_split]
 
+def predict_through_clusters(dataset, clusters_model, prediction_models, scalers, window_size_clustering=1, window_size_forecasting=10):
+    """"
+    Test the whole process: classify the input window and forecast next step for it
+    Args:
+        dataset (ndarray) : (N_samples, N_features)
+        clusters_model (kmeans model) : 
+        prediction_models (list) : list of forecasting models
+        window_size_clustering (int)
+        window_size_forecasting (int)
+    Returns:
+        y_pred (ndarray) : (N_samples - window_size_forecasting + 1, N_features)
+    """
+    N_clusters = len(prediction_models)
+    # dataset_windows = sliding_window_view(dataset, (window_size_clustering, dataset.shape[-1]))
+    dataset_windows = np.array([dataset[i:i+window_size_clustering].flatten() for i in range(dataset.shape[0] - window_size_clustering)])
+    cluster_nums = clusters_model.predict(dataset_windows)
+    print(f"{dataset.shape=}, {dataset_windows.shape=}, {cluster_nums=}")
+    cluster_nums = np.pad(cluster_nums, (dataset.shape[0] - dataset_windows.shape[0]), mode='constant', constant_values=(cluster_nums[0])) #-1
+    # if window_size_clustering > window_size_forecasting:
+    #     cluster_num = np.pad(cluster_nums, (0, ), mode='constant', constant_values=(cluster_nums[-1]))
+    y_pred = np.zeros((dataset.shape[0] - window_size_forecasting, dataset.shape[-1]))
+    print(f"{dataset.shape=}")
+    dataset_windows = sliding_window_view(dataset, (window_size_forecasting + 1, dataset.shape[-1]))
+    print(f"{dataset_windows.shape=}")
+    for i in range(y_pred.shape[0]):
+        cur_cluster_num = cluster_nums[i + window_size_forecasting]
+        window = scalers[cur_cluster_num].transform(dataset_windows[i, 0])[0]
+        cur_pred = np.array(prediction_models[cur_cluster_num](window[None, ...]))
+        cur_pred = scalers[cur_cluster_num].inverse_transform(cur_pred)[0] + dataset_windows[i, 0, 0]
+        y_pred[i] = cur_pred
+    return y_pred
