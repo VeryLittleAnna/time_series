@@ -25,8 +25,8 @@ import Clustering
 from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-10
-MAX_ITERS_KMEANS = 50
-MAX_EPOCHS = 20
+MAX_ITERS_KMEANS = 100
+MAX_EPOCHS = 40
 
 
 def my_mase(y_true, y_pred, multioutput='raw_values'):
@@ -186,7 +186,7 @@ def try_parameters(parameters, dataset):
                 best_model = {'models':cur_models[:], "scalers":scalers, 'clusters_model':clusters_model}
             answer[(window_size, N_clusters)] = ["str cluster_metrics clusters_model metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
                     clusters_model, metrics, clusters_sizes, weighted_mase, weighted_mape]
-    output = open('output_metrics.pickle', 'wb')
+    output = open('output_metrics_1.pickle', 'wb')
     pickle.dump(answer, output)
     output.close()
     return best_model, best_model_mase
