@@ -26,7 +26,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-15
 MAX_ITERS_KMEANS = 100    
-MAX_EPOCHS = 50
+MAX_EPOCHS = 30
 
 
 def my_mase(y_true, y_pred, multioutput='raw_values'):
@@ -184,14 +184,10 @@ def try_parameters(parameters, dataset):
                 sc = MyStandardScaler()
                 sc.fit(clusters_X[cluster_num])
                 prepared_data = sc.transform(clusters_X[cluster_num])
-                print(f"{prepared_data.shape=}")
                 prepared_X, prepared_y = split_X_y(prepared_data)
                 sc.save_first_elements(clusters_X[cluster_num], y=1)
-                print(f"{clusters_X[cluster_num].shape=}, {prepared_X.shape=}, {prepared_y.shape=}")
                 scalers[cluster_num] = sc
-                print(f"-> {prepared_y.shape[0]}")
                 train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(prepared_X, prepared_y, part_of_test=0.2, part_of_valid=0.2)
-                print(f"-> {train_X.shape[0]}, {valid_X.shape[0]}, {test_y.shape[0]}, {train_X.shape[0] + valid_X.shape[0] + test_y.shape[0]}")
                 print(f"Before prediction: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}")
                 try:
                     assert(len(test_X.shape) == 3 and test_X.shape[0] > 0)
@@ -202,7 +198,6 @@ def try_parameters(parameters, dataset):
                     tmp = np.array([np.inf] * dataset.shape[-1])
                     metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
                     continue
-                print(f"Before learn: {train_X.shape=}, {train_y.shape=}, {valid_X.shape=}, {valid_y.shape=}")
                 model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
                 predicted = model.predict(test_X) #(N, Q)
                 predicted_original = sc.inverse_transform(predicted)
@@ -274,13 +269,11 @@ class MyStandardScaler:
 
 
     def transform(self, data, dif=True):
-        print(f"In transform {data.shape=}, {dif=}")
         if dif:
             result_data = np.diff(data, axis=1)
         else:
             result_data = data
         result_data = (data - self.mean) / np.maximum(self.std, eps)
-        print(f"{result_data.shape=}")
         return result_data 
 
     def inverse_transform(self, data):
@@ -386,9 +379,7 @@ def predict_through_clusters(dataset, clusters_model, prediction_models, scalers
     y_pred = np.zeros((dataset.shape[0] - window_size_forecasting, dataset.shape[-1]))
     #only if dif then +1
     dataset_windows = sliding_window_view(dataset, (window_size_forecasting + 1, dataset.shape[-1]))
-    print(f"{dataset_windows.shape=}")
     cluster_nums = cluster_nums[window_size_forecasting:] #+1
-    print(f"{cluster_nums.shape=}")
     full_results = np.zeros((cluster_nums.shape[0], 2 * dataset.shape[-1] + 2)) # real_Q, Q, cluster_num, mask
     for cluster_num in range(N_clusters):
         mask = (cluster_nums == cluster_num)
@@ -402,9 +393,7 @@ def predict_through_clusters(dataset, clusters_model, prediction_models, scalers
             y_pred[mask] = clusters_model.cluster_centers_[cluster_num][-dataset.shape[-1]:]
             continue
         scalers[cluster_num].save_first_elements(cur_windows)
-        print(f"{cluster_num=}, {len(scalers)=}")
         cur_windows = np.array(scalers[cluster_num].transform(cur_windows))
-        print(f"{cur_windows.shape=}")        
         cur_pred = np.array(prediction_models[cluster_num](cur_windows)) #(M, Q)
         cur_pred = scalers[cluster_num].inverse_transform(cur_pred)
         cur_pred = scalers[cluster_num].add_first_elements(cur_pred)
