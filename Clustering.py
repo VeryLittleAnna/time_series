@@ -7,6 +7,9 @@ from sklearn.cluster import KMeans
 from collections import defaultdict
 from sklearn.metrics import davies_bouldin_score
 
+from numpy.lib.stride_tricks import sliding_window_view
+
+
 
 N_clusters=5
 
@@ -49,7 +52,7 @@ def flatten_from_interceting_windows(dataset, labels, N_clusters=None, W=1):
         dataset_result[cluster_num].append(tmp.reshape(tmp.shape[0] * tmp.shape[1], tmp.shape[2]))
     return dataset_result
 
-def split_to_clusters(dataset, labels, W=1):
+def split_to_clusters1(dataset, labels, W=1):
     print(f"In split_to_clusters: {len(dataset)=}, {(len(labels) + W)=}")
     assert(len(dataset) == (len(labels) + W))
     N_clusters = np.max(np.array(labels)) + 1
@@ -64,18 +67,63 @@ def split_to_clusters(dataset, labels, W=1):
     return dataset_result
 
 
-def calc_clusters_metrics(dataset, labels, centroids=None):
-    """
-    dataset - windows
-    Returns:
-        Davies-Bouldin Index
-    """
-    if len(dataset.shape) == 3:
-        dataset = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
-    answer = {}
-    answer["DB"] = davies_bouldin_score(dataset, labels)
-    # dist_in = np.array([labels[i] == k for i in range(len(labels)) for k in range N_clusters])
-    return answer
+class DatasetClusters:
+    def __init__(self, dataset, labels):
+        self.dataset = dataset
+        self.label = labels
+    def __iter__(self):
+        self.cur_num_cluster = 0
+        return self
+    
+    def __next__(self):
+        mask = (self.labels == self.cur_num_cluster)
+        
+        self.cur_num_cluster += 1
+
+
+def split_to_clusters(dataset, labels, W=11):
+    N_clusters = np.max(labels) + 1
+    print(f"{N_clusters=}")
+    labels = labels[W-2:-1] #класс относится к последнему в X
+    clusters_datasets, clusters_y = [], []
+    dataset_windows = sliding_window_view(dataset, (W, dataset.shape[-1])) #(N, 1, W, Q)
+    print(f"{dataset_windows.shape=}, {labels.shape=}")
+    assert(dataset_windows.shape[0] == labels.shape[0])
+    for cluster_num in range(N_clusters):
+        mask = (labels == cluster_num)
+        clusters_datasets.append(dataset_windows[mask, 0, :, :])
+        # clusters_y.append(dataset_windows[mask, 0, W, :])
+    return clusters_datasets, labels #, clusters_y
+
+
+
+class ClustersMetrics:
+    answers_DB = {} #(W, N)
+
+    def __init__(self):
+        pass
+    def calc_DB(self, dataset, labels, W=1, N=1):
+        """
+        dataset - windows
+        Returns:
+            Davies-Bouldin Index
+        """
+        if len(dataset.shape) == 3:
+            data = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
+        else:
+            data = dataset[:]
+        ClustersMetrics.answers_DB[(W, N)] = davies_bouldin_score(data, labels)
+
+    def dump(self):
+        with open("clusters_metrics.csv", "w") as csvfile:
+            Ns = sorted(list(set([k[1] for k in ClustersMetrics.answers_DB.keys()])))
+            Ws = sorted(list(set([k[0] for k in ClustersMetrics.answers_DB.keys()])))
+            writer = csv.writer(csvfile)
+            writer.writerow([' ']+Ns)
+            for W in Ws:
+                writer.writerow([W] + [ClustersMetrics.answers_DB[(W, N)] for N in Ns])
+    
+
 
 def create_segments(data, segment_size=1):
     """

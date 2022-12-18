@@ -16,3 +16,4 @@ __pycache__/
 *.py[cod]
 
 test.ipynb
+!output_table.csv
