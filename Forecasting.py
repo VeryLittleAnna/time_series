@@ -1,6 +1,7 @@
 # from sklearn.preprocessing import MinMaxScaler
 # from sklearn.preprocessing import LabelEncoder
 import keras
+import tensorflow as tf
 from sklearn.metrics import mean_squared_error
 from keras.models import Sequential
 from keras.layers import Dense
@@ -27,6 +28,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 eps=1e-15
 MAX_ITERS_KMEANS = 100    
 MAX_EPOCHS = 30
+
 
 
 def my_mase(y_true, y_pred, multioutput='raw_values'):
@@ -111,6 +113,7 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     #     dataset (list): list of continuos datasets_i: (N_i_samples, N_features)
     #     window_size (int): size of window for LSTM layer
     """
+#     tf.debugging.set_log_device_placement(True)
     N_features = dataset_X.shape[-1]
     if window_size is None:
         window_size = dataset_X.shape[1]
@@ -219,7 +222,7 @@ def try_parameters(parameters, dataset):
                 best_full_results = np.copy(full_results)
             answer[(window_size, N_clusters)] = ["str cluster_metrics clusters_model metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
                     clusters_model, metrics, clusters_sizes, weighted_mase, weighted_mape]
-    output = open('output_metrics_2.pickle', 'wb')
+    output = open('output_metrics_3.pickle', 'wb')
     pickle.dump(answer, output)
     output.close()
     cluster_metrics.dump()
