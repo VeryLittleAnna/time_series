@@ -26,7 +26,7 @@ import Clustering
 from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-15
-MAX_ITERS_KMEANS = 100    
+MAX_ITERS_KMEANS = 200
 MAX_EPOCHS = 30
 
 
@@ -165,11 +165,21 @@ def try_parameters(parameters, dataset):
     window_size_forecasting = 10
     cluster_metrics = Clustering.ClustersMetrics()
     for window_size in parameters["window_size_for_clustering"]:
-        for N_clusters in parameters["N_clusters"]:
+        for cluster_algorithm in parameters["cluster_algs"]:
             dataset_windows, dataset_y = create_windows(dataset, window_size=window_size)
             print(f"{dataset_windows.shape=}", file=logs)
-            clusters_model = Clustering.KMeans_for_windows(dataset_windows, W=window_size, N_clusters=N_clusters, max_iter=MAX_ITERS_KMEANS)
-            clusters_labels = clusters_model.labels_
+        # for N_clusters in parameters["N_clusters"]:
+            N_clusters = 9
+            if cluster_algorithm == Clustering.Kmeans_for_windows:
+                clusters_model = Clustering.KMeans_for_windows(W=window_size, N_clusters=N_clusters, max_iter=MAX_ITERS_KMEANS)
+            else:
+                clusters_model = Clustering.MeanShift_for_windows(W=window_size, max_iter=MAX_ITERS_KMEANS)
+                
+            clusters_labels = clusters_model.fit_predict(dataset_windows)
+            if cluster_algorithm == Clustering.MeanShift_for_windows:
+                N_clusters = np.sum(np.unique())
+            plt.hist(clusters_labels)
+            plt.savefig(f"Hist_clusters_sizes_{cluster_algorithm}.png")
             cluster_metrics.calc_DB(dataset_windows, clusters_labels, W=window_size, N=N_clusters)
 
             clusters_labels = np.pad(clusters_labels, (dataset.shape[0] - clusters_labels.shape[0], 0), mode='constant', constant_values=(clusters_labels[0])) 
@@ -218,10 +228,10 @@ def try_parameters(parameters, dataset):
             weighted_mape = np.average(np.row_stack([metrics[i]["mape"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
             if best_model_mase is None or np.mean(weighted_mase) < best_model_mase:
                 best_model_mase = np.mean(weighted_mase)
-                best_model = {'models':cur_models[:], "scalers":scalers, 'clusters_model':clusters_model}
+                best_model = {'models':cur_models[:], "scalers":scalers, 'clusters_model':clusters_model.model}
                 best_full_results = np.copy(full_results)
             answer[(window_size, N_clusters)] = ["str cluster_metrics clusters_model metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
-                    clusters_model, metrics, clusters_sizes, weighted_mase, weighted_mape]
+                    clusters_model.model, metrics, clusters_sizes, weighted_mase, weighted_mape]
     output = open('output_metrics_3.pickle', 'wb')
     pickle.dump(answer, output)
     output.close()

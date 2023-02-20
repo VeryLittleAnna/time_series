@@ -9,22 +9,65 @@ from sklearn.metrics import davies_bouldin_score
 
 from numpy.lib.stride_tricks import sliding_window_view
 
+from sklearn.cluster import MeanShift
 
 
 N_clusters=5
 
-def KMeans_for_windows(dataset, W=5, N_clusters=8, max_iter=200):
-    if isinstance(dataset, pd.DataFrame):
-        dataset = dataset.to_numpy()
-    if len(dataset.shape) < 3:
-        windows = np.array([dataset[i:i+W].flatten() for i in range(dataset.shape[0] - W)])
-    else:
-        windows = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
-    if N_clusters == 1:
-        return np.zeros((windows.shape[0]), dtype=np.int8)
-    model = KMeans(n_clusters=N_clusters, max_iter=max_iter, init='random') #n_jobs ??
-    res = model.fit_predict(windows)
-    return model
+
+class Clusterization:
+    def __init__(self, W=5, max_iter=200):
+        self.W = W
+        self.max_iter = max_iter
+    def prepare(self, dataset):
+        if isinstance(dataset, pd.DataFrame):
+            dataset = dataset.to_numpy()
+        if len(dataset.shape) < 3:
+            windows = np.array([dataset[i:i+self.self.W].flatten() for i in range(dataset.shape[0] - self.self.W)])
+        else:
+            windows = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
+        return windows
+
+class Kmeans_for_windows(Clusterization):
+    def __init__(self, N_clusters=7, **kwargs):
+        super().__init__(kwargs)
+        self.N_clusters = N_clusters
+    def fit_predict(self, dataset):
+        windows = self.prepare(dataset)
+        if N_clusters == 1:
+            return np.zeros((windows.shape[0]), dtype=np.int8)
+        model = KMeans(n_clusters=N_clusters, max_iter=self.max_iter, init='random') #n_jobs ??
+        self.model = model.fit_predict(windows)
+        return self.model
+    def __str__(self):
+        return 'Kmeans_for_windows'
+
+class MeanShift_for_windows(Clusterization):
+    def __init__(self, **kwargs):
+        super().__init__(kwargs)
+    def fit_predict(self, dataset):
+        windows = self.prepare(dataset)
+        model = MeanShift(max_iter=self.max_iter, n_jobs=-1) #n_jobs ??
+        self.model = model.fit_predict(windows)
+        return self.model
+    def __str_(self):
+        return 'MeanShift_for_windows'
+
+# def KMeans_for_windows(dataset, W=5, N_clusters=8, max_iter=200):
+#     if isinstance(dataset, pd.DataFrame):
+#         dataset = dataset.to_numpy()
+#     if len(dataset.shape) < 3:
+#         windows = np.array([dataset[i:i+W].flatten() for i in range(dataset.shape[0] - W)])
+#     else:
+#         windows = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
+#     if N_clusters == 1:
+#         return np.zeros((windows.shape[0]), dtype=np.int8)
+#     model = KMeans(n_clusters=N_clusters, max_iter=max_iter, init='random') #n_jobs ??
+#     res = model.fit_predict(windows)
+#     return model
+    
+
+
 
 def flatten_from_interceting_windows(dataset, labels, N_clusters=None, W=1):
     """
