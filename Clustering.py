@@ -11,47 +11,76 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 from sklearn.cluster import MeanShift
 
+from sklearn.cluster import AgglomerativeClustering
+
 
 N_clusters=5
 
 
 class Clusterization:
-    def __init__(self, W=5, max_iter=200):
+    def __init__(self, W=1):
         self.W = W
-        self.max_iter = max_iter
+        print(f"Clusterization __init__: {W=}, {type(self.W)}")
     def prepare(self, dataset):
         if isinstance(dataset, pd.DataFrame):
             dataset = dataset.to_numpy()
-        if len(dataset.shape) < 3:
-            windows = np.array([dataset[i:i+self.self.W].flatten() for i in range(dataset.shape[0] - self.self.W)])
-        else:
-            windows = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
-        return windows
+        if len(dataset.shape) == 2:
+            dataset_windows = sliding_window_view(dataset, (self.W, dataset.shape[-1])) #(N, 1, W, Q)
+            new_shape = dataset_windows.shape
+            dataset_windows = dataset_windows.reshape(new_shape[0], new_shape[2] * new_shape[3]) #(N, W, Q)
+        dataset_windows = dataset_windows.reshape(dataset_windows.shape[0], -1)
+#         dataset_windows = np.array([dataset_windows[i].flatten() for i in range(dataset.shape[0])])
+        return dataset_windows
+    def str(self):
+        return "Clusterization algorithm"
+    def info(self):
+        attrs = [x for x in dir(self) if not callable(x)]
+        return str(self) + " " + "; ".join([str(a) + "=" + str(getattr(self, a)) for a in attrs])
 
 class Kmeans_for_windows(Clusterization):
-    def __init__(self, N_clusters=7, **kwargs):
-        super().__init__(kwargs)
+    def __init__(self, N_clusters=7, max_iter=200, **kwargs):
+        super().__init__(**kwargs)
         self.N_clusters = N_clusters
+        self.max_iter = max_iter
+
     def fit_predict(self, dataset):
         windows = self.prepare(dataset)
-        if N_clusters == 1:
+        if self.N_clusters == 1:
             return np.zeros((windows.shape[0]), dtype=np.int8)
-        model = KMeans(n_clusters=N_clusters, max_iter=self.max_iter, init='random') #n_jobs ??
-        self.model = model.fit_predict(windows)
-        return self.model
+        model = KMeans(n_clusters=self.N_clusters, max_iter=self.max_iter, init='random') #n_jobs ??
+
+        labels = model.fit_predict(windows)
+        self.model = model
+        return model
     def __str__(self):
         return 'Kmeans_for_windows'
 
 class MeanShift_for_windows(Clusterization):
-    def __init__(self, **kwargs):
-        super().__init__(kwargs)
+    def __init__(self, max_iter=200, **kwargs):
+        super().__init__(**kwargs)
+        self.max_iter = max_iter
+
     def fit_predict(self, dataset):
         windows = self.prepare(dataset)
-        model = MeanShift(max_iter=self.max_iter, n_jobs=-1) #n_jobs ??
-        self.model = model.fit_predict(windows)
-        return self.model
+        model = MeanShift(max_iter=self.max_iter, n_jobs=-1) 
+        labels = model.fit_predict(windows)
+        self.model = model
+        return model
     def __str_(self):
         return 'MeanShift_for_windows'
+    
+class AgglomerativeClustering_for_windows(Clusterization):
+    def __init__(self, N_clusters=4, **kwargs):
+        super().__init__(**kwargs)
+        self.N_clusters = N_clusters
+    def fit_predict(self, dataset):
+        windows = self.prepare(dataset)
+        model = AgglomerativeClustering(n_clusters=self.N_clusters, affinity ="euclidean", linkage="ward") 
+        labels = model.fit_predict(windows)
+        self.model = model
+        return model
+    def __str_(self):
+        return 'AgglomerativeClustering_for_windows'
 
 # def KMeans_for_windows(dataset, W=5, N_clusters=8, max_iter=200):
 #     if isinstance(dataset, pd.DataFrame):
@@ -124,8 +153,8 @@ class DatasetClusters:
         self.cur_num_cluster += 1
 
 
-def split_to_clusters(dataset, labels, W=11):
-    N_clusters = np.max(labels) + 1
+def split_to_clusters(dataset, labels, W): #W=11
+    N_clusters = len(np.unique(labels))
     print(f"{N_clusters=}")
     labels = labels[W-2:-1] #класс относится к последнему в X
     clusters_datasets, clusters_y = [], []
@@ -144,21 +173,22 @@ class ClustersMetrics:
     answers_DB = {} #(W, N)
 
     def __init__(self):
-        pass
+        answers_DB = {}
     def calc_DB(self, dataset, labels, W=1, N=1):
         """
-        dataset - windows
+        dataset (N_samples, Q)
         Returns:
             Davies-Bouldin Index
         """
-        if len(dataset.shape) == 3:
-            data = np.array([dataset[i].flatten() for i in range(dataset.shape[0])])
-        else:
-            data = dataset[:]
-        ClustersMetrics.answers_DB[(W, N)] = davies_bouldin_score(data, labels)
+        if len(dataset.shape) == 2:
+            dataset_windows = sliding_window_view(dataset, (W, dataset.shape[-1])) #(N, 1, W, Q)
+            new_shape = dataset_windows.shape
+            dataset_windows = dataset_windows.reshape(new_shape[0], new_shape[2] * new_shape[3]) #(N, W, Q)
+        ClustersMetrics.answers_DB[(W, N)] = davies_bouldin_score(dataset_windows, labels)
 
     def dump(self):
-        with open("clusters_metrics.csv", "w") as csvfile:
+        print(ClustersMetrics.answers_DB.keys())
+        with open("clusters_metrics_03-08_1.csv", "w") as csvfile:
             Ns = sorted(list(set([k[1] for k in ClustersMetrics.answers_DB.keys()])))
             Ws = sorted(list(set([k[0] for k in ClustersMetrics.answers_DB.keys()])))
             writer = csv.writer(csvfile)

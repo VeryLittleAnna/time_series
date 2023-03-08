@@ -115,6 +115,10 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     """
 #     tf.debugging.set_log_device_placement(True)
     N_features = dataset_X.shape[-1]
+    plt.hist(dataset_X[:, 0, 8])
+    plt.title(dataset_X.shape)
+    plt.show()
+    
     if window_size is None:
         window_size = dataset_X.shape[1]
     model = Sequential()
@@ -159,84 +163,80 @@ def try_parameters(parameters, dataset):
         parameters (dict): dict with keys from {N_clusters, window_size_for_clustering, dif}
     """
     logs = open("logs", "w")
-    best_model_mase, best_clusters_model = None, None
+    best_model_mae, best_clusters_model = None, None
     best_model, answer = {}, {}
     best_full_results = None
     window_size_forecasting = 10
     cluster_metrics = Clustering.ClustersMetrics()
-    for window_size in parameters["window_size_for_clustering"]:
-        for cluster_algorithm in parameters["cluster_algs"]:
-            dataset_windows, dataset_y = create_windows(dataset, window_size=window_size)
-            print(f"{dataset_windows.shape=}", file=logs)
-        # for N_clusters in parameters["N_clusters"]:
-            N_clusters = 9
-            if cluster_algorithm == Clustering.Kmeans_for_windows:
-                clusters_model = Clustering.KMeans_for_windows(W=window_size, N_clusters=N_clusters, max_iter=MAX_ITERS_KMEANS)
-            else:
-                clusters_model = Clustering.MeanShift_for_windows(W=window_size, max_iter=MAX_ITERS_KMEANS)
-                
-            clusters_labels = clusters_model.fit_predict(dataset_windows)
-            if cluster_algorithm == Clustering.MeanShift_for_windows:
-                N_clusters = np.sum(np.unique())
-            plt.hist(clusters_labels)
-            plt.savefig(f"Hist_clusters_sizes_{cluster_algorithm}.png")
-            cluster_metrics.calc_DB(dataset_windows, clusters_labels, W=window_size, N=N_clusters)
+    for cluster_algorithm in parameters["cluster_algs"]:
+#         print(cluster_algorithm.info())
+        clusters_model = cluster_algorithm.fit_predict(dataset)
+        print(type(clusters_model))
+        clusters_labels = clusters_model.labels_
+        N_clusters = len(np.unique(clusters_labels))
+        print(f"{cluster_algorithm}: {N_clusters=}")
+        plt.clf()
+        plt.hist(clusters_labels)
+        plt.savefig(f"Hist_clusters_sizes_{cluster_algorithm}_W={cluster_algorithm.W}_N={N_clusters}_03-07_1.png")
+        cluster_metrics.calc_DB(dataset, clusters_labels, W=cluster_algorithm.W, N=N_clusters)
 
-            clusters_labels = np.pad(clusters_labels, (dataset.shape[0] - clusters_labels.shape[0], 0), mode='constant', constant_values=(clusters_labels[0])) 
-            clusters_X, clusters_labels = Clustering.split_to_clusters(dataset, clusters_labels, W=window_size_forecasting + 2)
-            full_results = np.zeros((clusters_labels.shape[0], 2 * dataset.shape[-1] + 2)) # real_Q, Q, cluster_num, mask
-            # print(f"{clusters_X[0].shape=}, {clusters_y[0].shape=}, {clusters_X[1].shape=}, {clusters_y[1].shape}")
-            # clusters_labels = clusters_labels[-sum([clusters_X[]])]
-            print("meow: ", [clusters_X[i].shape for i in range(len(clusters_X))], file=logs)
-            metrics = [0] * N_clusters
-            cur_models = [0] * N_clusters
-            scalers = [0] * N_clusters
-            for cluster_num in range(N_clusters):
-                # clusters_mask = (clusters_labels == cluster_num)
-                print(f"All: {np.sum(clusters_labels == cluster_num)}", file=logs)
-                sc = MyStandardScaler()
-                sc.fit(clusters_X[cluster_num])
-                print(f"{sc.mean=}, {sc.std=}", file=logs)
-                prepared_data = sc.transform(clusters_X[cluster_num])
-                prepared_X, prepared_y = split_X_y(prepared_data)
-                sc.save_first_elements(clusters_X[cluster_num], y=1)
-                scalers[cluster_num] = sc
-                train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(prepared_X, prepared_y, part_of_test=0.2, part_of_valid=0.2)
-                print(f"Before prediction: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}", file=logs)
-                try:
-                    assert(len(test_X.shape) == 3 and test_X.shape[0] > 0)
-                    assert(len(valid_X.shape) == 3 and valid_X.shape[0] > 0)
-                    assert(len(train_X.shape) == 3 and train_X.shape[0] > 0)
-                except AssertionError:
-                    print(f"FAIL - {test_X.shape=}, {valid_X.shape=}, {train_X.shape=}", file=logs)
-                    tmp = np.array([np.inf] * dataset.shape[-1])
-                    metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
-                    continue
-                model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
-                predicted = model.predict(test_X) #(N, Q)
-                print(f"{train_X[0]=}\n{train_y[0]=}\n{model(train_X[None, 0])=}\n", file=logs)
-                predicted_original = sc.inverse_transform(predicted)
-                predicted_original = sc.add_first_elements(predicted_original)
-                y_true = clusters_X[cluster_num][-test_X.shape[0]:, -1, :]
-                metrics[cluster_num] = calc_metrics(y_true, predicted_original)
-                print(f"{metrics[cluster_num]=}", file=logs)
-                cur_models[cluster_num] = model
-                clusters_mask = (clusters_labels == cluster_num)
-                full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, sc)                
-            clusters_sizes = np.array([np.sum(clusters_labels == i) for i in range(N_clusters)])
-            weighted_mase = np.average(np.row_stack([metrics[i]["mase"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
-            weighted_mape = np.average(np.row_stack([metrics[i]["mape"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
-            if best_model_mase is None or np.mean(weighted_mase) < best_model_mase:
-                best_model_mase = np.mean(weighted_mase)
-                best_model = {'models':cur_models[:], "scalers":scalers, 'clusters_model':clusters_model.model}
-                best_full_results = np.copy(full_results)
-            answer[(window_size, N_clusters)] = ["str cluster_metrics clusters_model metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
-                    clusters_model.model, metrics, clusters_sizes, weighted_mase, weighted_mape]
-    output = open('output_metrics_3.pickle', 'wb')
+        clusters_labels = np.pad(clusters_labels, (dataset.shape[0] - clusters_labels.shape[0], 0), mode='constant', constant_values=(clusters_labels[0])) 
+        print(f"{len(np.unique(clusters_labels))=}")
+        clusters_X, clusters_labels = Clustering.split_to_clusters(dataset, clusters_labels, W=window_size_forecasting + 2)
+        full_results = np.zeros((clusters_labels.shape[0], 2 * dataset.shape[-1] + 2)) # real_Q, Q, cluster_num, mask
+        # print(f"{clusters_X[0].shape=}, {clusters_y[0].shape=}, {clusters_X[1].shape=}, {clusters_y[1].shape}")
+        # clusters_labels = clusters_labels[-sum([clusters_X[]])]
+        print("meow: ", [clusters_X[i].shape for i in range(len(clusters_X))], file=logs)
+        metrics = [0] * N_clusters
+        cur_models = [0] * N_clusters
+        scalers = [0] * N_clusters
+        for cluster_num in range(N_clusters):
+            # clusters_mask = (clusters_labels == cluster_num)
+            print(f"All: {np.sum(clusters_labels == cluster_num)}", file=logs)
+            sc = MyStandardScaler()
+            sc.fit(clusters_X[cluster_num])
+            print(f"{sc.mean=}, {sc.std=}", file=logs)
+            prepared_data = sc.transform(clusters_X[cluster_num])
+            prepared_X, prepared_y = split_X_y(prepared_data)
+            sc.save_first_elements(clusters_X[cluster_num], y=1)
+            scalers[cluster_num] = sc
+            train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(prepared_X, prepared_y, part_of_test=0.2, part_of_valid=0.2)
+            print(f"Before prediction: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}", file=logs)
+            try:
+                assert(len(test_X.shape) == 3 and test_X.shape[0] > 0)
+                assert(len(valid_X.shape) == 3 and valid_X.shape[0] > 0)
+                assert(len(train_X.shape) == 3 and train_X.shape[0] > 0)
+            except AssertionError:
+                print(f"FAIL - {test_X.shape=}, {valid_X.shape=}, {train_X.shape=}", file=logs)
+                tmp = np.array([np.inf] * dataset.shape[-1])
+                metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
+                continue
+            model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
+            predicted = model.predict(test_X) #(N, Q)
+            print(f"{train_X[0]=}\n{train_y[0]=}\n{model(train_X[None, 0])=}\n", file=logs)
+            predicted_original = sc.inverse_transform(predicted)
+            predicted_original = sc.add_first_elements(predicted_original)
+            y_true = clusters_X[cluster_num][-test_X.shape[0]:, -1, :]
+            metrics[cluster_num] = calc_metrics(y_true, predicted_original)
+            print(f"{metrics[cluster_num]=}", file=logs)
+            cur_models[cluster_num] = model
+            clusters_mask = (clusters_labels == cluster_num)
+            full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, sc)                
+        clusters_sizes = np.array([np.sum(clusters_labels == i) for i in range(N_clusters)])
+        weighted_mase = np.average(np.row_stack([metrics[i]["mase"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+        weighted_mape = np.average(np.row_stack([metrics[i]["mape"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+        weighted_mae =  np.average(np.row_stack([metrics[i]["mae"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+        if best_model_mae is None or np.mean(weighted_mae) < best_model_mae:
+            best_model_mae = np.mean(weighted_mae)
+            best_model = {'models':cur_models[:], "scalers":scalers, 'clusters_model':clusters_model}
+            best_full_results = np.copy(full_results)
+        answer[(cluster_algorithm.W, N_clusters)] = ["str cluster_metrics clusters_model metrics clusters_sizes weighted_mase weighted_mape", cluster_metrics, \
+                clusters_model, metrics, clusters_sizes, weighted_mase, weighted_mape]
+    output = open('output_metrics_03-08_1.pickle', 'wb')
     pickle.dump(answer, output)
     output.close()
-    cluster_metrics.dump()
-    return best_model, best_model_mase, best_full_results
+    #cluster_metrics.dump()
+    return best_model, best_model_mae, best_full_results
 
 
 def create_windows(data, window_size=1):
@@ -302,7 +302,7 @@ class MyStandardScaler:
         """
         # if len(data.shape) == 2:
         #     data = data.reshape(data.shape[0], 1, data.shape[2])
-        result_data = self.std * data + self.mean   
+        result_data = self.std * data + self.mean
         # result_data = np.cumsum(np.concatenate([np.zeros((data.shape[0], 1, data.shape[2])), data], axis=1), axis=1)
         # result_data = result_data[1:, ...] #delete first zeroes
         return result_data
