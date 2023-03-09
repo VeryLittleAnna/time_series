@@ -96,6 +96,21 @@ class AgglomerativeClustering_for_windows(Clusterization):
 #     return model
     
 
+    
+def apply_clustering(dataset, clustering_algorithm):
+    clusters_model = clustering_algorithm.fit_predict(dataset)
+    print(type(clusters_model))
+    clusters_labels = clusters_model.labels_
+    N_clusters = len(np.unique(clusters_labels))
+    print(f"{clustering_algorithm}: {N_clusters=}")
+    plt.clf()
+    plt.hist(clusters_labels)
+    plt.savefig(f"Hist_clusters_sizes_{clustering_algorithm}_W={clustering_algorithm.W}_N={N_clusters}_03-07_1.png")
+#     cluster_metrics.calc_DB(dataset, clusters_labels, W=cluster_algorithm.W, N=N_clusters)
+    clusters_labels = np.pad(clusters_labels, (dataset.shape[0] - clusters_labels.shape[0], 0), mode='constant', constant_values=(clusters_labels[0])) 
+    #if Agglomerative -> classifier
+    return clusters_labels, clusters_model
+        
 
 
 def flatten_from_interceting_windows(dataset, labels, N_clusters=None, W=1):

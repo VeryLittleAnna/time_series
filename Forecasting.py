@@ -157,12 +157,56 @@ def calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y
     return results
 
 
+def apply_forecasting_training(dataset, clusters_labels, W=10):
+    logs = open("logs", "w")
+    clusters_X, clusters_labels = Clustering.split_to_clusters(dataset, clusters_labels, W=W + 2)
+    full_results = np.zeros((clusters_labels.shape[0], 2 * dataset.shape[-1] + 2)) # real_Q, Q, cluster_num, mask
+    print("clustes sizes: ", [clusters_X[i].shape for i in range(len(clusters_X))], file=logs)
+    N_clusters = len(np.unique(clusters_labels))
+    metrics = [0] * N_clusters
+    cur_models = [0] * N_clusters
+    scalers = [0] * N_clusters
+    for cluster_num in range(N_clusters):
+        sc = MyStandardScaler()
+        sc.fit(clusters_X[cluster_num])
+        print(f"{sc.mean=}, {sc.std=}", file=logs)
+        prepared_data = sc.transform(clusters_X[cluster_num])
+        prepared_X, prepared_y = split_X_y(prepared_data)
+        sc.save_first_elements(clusters_X[cluster_num], y=1)
+        scalers[cluster_num] = sc
+        train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(prepared_X, prepared_y, part_of_test=0.2, part_of_valid=0.2)
+        print(f"Before prediction: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}", file=logs)
+        try:
+            assert(len(test_X.shape) == 3 and test_X.shape[0] > 0)
+            assert(len(valid_X.shape) == 3 and valid_X.shape[0] > 0)
+            assert(len(train_X.shape) == 3 and train_X.shape[0] > 0)
+        except AssertionError:
+            print(f"FAIL - {test_X.shape=}, {valid_X.shape=}, {train_X.shape=}", file=logs)
+            tmp = np.array([np.inf] * dataset.shape[-1])
+            metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
+            continue
+        model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
+        predicted = model.predict(test_X) #(N, Q)
+        predicted_original = sc.inverse_transform(predicted)
+        predicted_original = sc.add_first_elements(predicted_original)
+        y_true = clusters_X[cluster_num][-test_X.shape[0]:, -1, :]
+        metrics[cluster_num] = calc_metrics(y_true, predicted_original) #?
+        cur_models[cluster_num] = model
+        clusters_mask = (clusters_labels == cluster_num)
+        full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, sc)
+    model = {'models':cur_models[:], "scalers":scalers}
+    clusters_sizes = np.array([np.sum(clusters_labels == i) for i in range(N_clusters)])
+    weighted_mase = np.average(np.row_stack([metrics[i]["mase"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+    weighted_mae =  np.average(np.row_stack([metrics[i]["mae"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+#     mae_on_max_cluster = metrics[np.argmax(clusters_sizes)]['mae']
+    return model, full_results, metrics, weighted_mase, weighted_mae 
+        
+
 def try_parameters(parameters, dataset):
     """
     Args:
         parameters (dict): dict with keys from {N_clusters, window_size_for_clustering, dif}
     """
-    logs = open("logs", "w")
     best_model_mae, best_clusters_model = None, None
     best_model, answer = {}, {}
     best_full_results = None
@@ -208,7 +252,7 @@ def try_parameters(parameters, dataset):
                 assert(len(train_X.shape) == 3 and train_X.shape[0] > 0)
             except AssertionError:
                 print(f"FAIL - {test_X.shape=}, {valid_X.shape=}, {train_X.shape=}", file=logs)
-                tmp = np.array([np.inf] * dataset.shape[-1])
+                tmp = np.array([1e12] * dataset.shape[-1])
                 metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
                 continue
             model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
