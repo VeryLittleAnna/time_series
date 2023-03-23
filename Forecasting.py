@@ -22,12 +22,13 @@ import json
 import csv
 import pickle
 import Clustering
+from sklearn.preprocessing import StandardScaler
 
 from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-15
 MAX_ITERS_KMEANS = 200
-MAX_EPOCHS = 30
+MAX_EPOCHS = 20
 
 
 
@@ -115,7 +116,7 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     """
 #     tf.debugging.set_log_device_placement(True)
     N_features = dataset_X.shape[-1]
-    plt.hist(dataset_X[:, 0, 8])
+    plt.hist(dataset_y[:, 9])
     plt.title(dataset_X.shape)
     plt.show()
     
@@ -136,27 +137,131 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
         history = model.fit(dataset_X, dataset_y, epochs=MAX_EPOCHS, batch_size=batch_size, shuffle=True, verbose=1, validation_data=(valid_X, valid_y), callbacks=[my_early_stopping])
     else:
         history = model.fit(dataset_X, dataset_y, epochs=20, batch_size=batch_size, shuffle=True, verbose=1) # validation_data=(test_X, test_y)
-    return model, history
+    return model
 
 
-def calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask_train_test, model, scaler):
+def calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask_train_test, model, scaler, dataset, W):
     print(f"In calc_results: {train_X.shape[0]}, {valid_X.shape[0]}, {test_X.shape[0]}, sum = {train_X.shape[0] + valid_X.shape[0] + test_X.shape[0]}")
+    print(scaler.__dict__)
     N = train_y.shape[0] + valid_y.shape[0] + test_y.shape[0]
     X = np.concatenate((train_X, valid_X, test_X), axis=0)
     y = np.concatenate((train_y, valid_y, test_y), axis=0)
+    plt.hist(y[:, 9])
+    plt.show()
     Q = train_X.shape[-1]
-    results = np.zeros((y.shape[0], 2 * Q + 2), dtype=np.float64)
+    results = np.zeros((y.shape[0], 4 * Q + 2), dtype=np.float64)
+#     results = {}
     predicted = model(X)
     assert(y.shape[0] == predicted.shape[0])
+    print(f"!!!! {np.mean(predicted)}")
+    print(predicted.shape)
+    plt.clf()
+    plt.plot(predicted[:100, 9], label="predicted")
+    plt.plot(y[:100, 9], label="true")
+    plt.legend()
+    plt.show()
+#     assert(0)
     predicted_original = scaler.inverse_transform(predicted)
-    predicted_original = scaler.add_first_elements(predicted_original)
-    results[:, :Q] = y
+    y_true = scaler.inverse_transform(y)
+    print(f"!!!! {np.mean(predicted_original)}")
+    print(f"{np.mean(np.abs(predicted_original - y))}")
+#     predicted_original = scaler.add_first_elements(predicted_original)
+    results[:, :Q] = y_true
     results[:, Q:2 * Q] = predicted_original
-    results[:, 2 * Q] = cluster_num
-    results[:, 2 * Q + 1] = mask_train_test
+    results[:, 2*Q:3*Q] = y
+    results[:, 3*Q:4*Q] = predicted
+    results[:, 4 * Q] = cluster_num
+    results[:, 4 * Q + 1] = mask_train_test
+    plt.plot(y_true[:100, 9], label="true")
+    plt.plot(predicted_original[:100, 9], label='predicted')
+    plt.legend()
+    plt.show()
     return results
+#     return , predicted_original + dataset[W:]
+#     return results 
+
+def calc_metrics_for_full_results(results):
+    Q = results.shape[-1] // 2 - 1
+    y_true = results[:, :Q]
+    y_pred = results[:, Q:2*Q]
+    cur_mae = mae(y_true, y_pred, multioutput='raw_values')
+    cur_mase = my_mase(y_true, y_pred, multioutput='raw_values')
+    return {"mae":cur_mae, "mase":cur_mase}
 
 
+def apply_forecasting_training_simple_version(dataset, clusters_labels, W=10):
+    scaler = StandardScaler()
+    scaled_dataset = np.diff(dataset, axis=0)
+    N, Q = dataset.shape
+    clusters_labels = clusters_labels[1:]
+    scaled_dataset = scaler.fit_transform(scaled_dataset)
+    full_results = np.zeros((N - W - 1, 4 * Q + 2))
+    N_clusters = len(np.unique(clusters_labels))
+    cur_models = [0] * N_clusters
+    metrics = [0] * N_clusters
+    clusters_X, clusters_labels = Clustering.split_to_clusters(scaled_dataset, clusters_labels, W=W+1)
+    for cluster_num in range(N_clusters):
+        clusters_mask = (clusters_labels == cluster_num)
+        X, y = split_X_y(clusters_X[cluster_num])
+        train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(X, y, part_of_test=0.2, part_of_valid=0.2)
+        print(np.sum(clusters_mask), full_results.shape)
+        model = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
+        cur_models[cluster_num] = model
+#         test_predict = model.predict(test_X)
+        full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, scaler, dataset, W)
+        
+        metrics[cluster_num] = calc_metrics_for_full_results(full_results[clusters_mask]) #?
+
+#     full_results[:, Q:2*Q] += dataset[W:-1] #first values
+#     full_results[:, :Q] += dataset[W:-1]
+    model = {"models":cur_models, "scaler":scaler}
+    return model, full_results, metrics
+
+def apply_forecasting_training_new_version(dataset, clusters_labels, learning_function=learn, W=10, logs=None):
+    if logs is None:
+        logs = open("logs", "w")
+    clusters_X, clusters_labels = Clustering.split_to_clusters(dataset, clusters_labels, W=W + 2)
+    full_results = np.zeros((clusters_labels.shape[0], 2 * dataset.shape[-1] + 2)) # real_Q, Q, cluster_num, mask
+    print("clustes sizes: ", [clusters_X[i].shape for i in range(len(clusters_X))], file=logs)
+    N_clusters = len(np.unique(clusters_labels))
+    metrics = [0] * N_clusters
+    cur_models = [0] * N_clusters
+    scalers = [0] * N_clusters
+    for cluster_num in range(N_clusters):
+        sc = MyStandardScaler()
+#         sc.fit(clusters_X[cluster_num])
+#         prepared_data = sc.transform(clusters_X[cluster_num])
+        prepared_data = sc.fit_transform(clusters_X[cluster_num])
+        prepared_X, prepared_y = split_X_y(prepared_data)
+#         sc.save_first_elements(clusters_X[cluster_num], y=1)
+        scalers[cluster_num] = sc
+        train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(prepared_X, prepared_y, part_of_test=0.2, part_of_valid=0.2)
+        print(f"Before prediction: {train_X.shape=}, {train_y.shape=}, {test_X.shape=}, {test_y.shape=}", file=logs)
+        try:
+            assert(len(test_X.shape) == 3 and test_X.shape[0] > 0)
+            assert(len(valid_X.shape) == 3 and valid_X.shape[0] > 0)
+            assert(len(train_X.shape) == 3 and train_X.shape[0] > 0)
+        except AssertionError:
+            print(f"FAIL - {test_X.shape=}, {valid_X.shape=}, {train_X.shape=}", file=logs)
+            tmp = np.array([np.inf] * dataset.shape[-1])
+            metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
+            continue
+        model = learning_function(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
+        predicted = model.predict(test_X) #(N, Q)
+        predicted_original = sc.inverse_transform(predicted)
+#         predicted_original = sc.add_first_elements(predicted_original)
+        y_true = clusters_X[cluster_num][-test_X.shape[0]:, -1, :]
+        metrics[cluster_num] = calc_metrics(y_true, predicted_original) #?
+        cur_models[cluster_num] = model
+        clusters_mask = (clusters_labels == cluster_num)
+        full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, sc)
+    model = {'models':cur_models[:], "scalers":scalers}
+    clusters_sizes = np.array([np.sum(clusters_labels == i) for i in range(N_clusters)])
+    weighted_mase = np.average(np.row_stack([metrics[i]["mase"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+    weighted_mae =  np.average(np.row_stack([metrics[i]["mae"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
+#     mae_on_max_cluster = metrics[np.argmax(clusters_sizes)]['mae']
+    return model, full_results, metrics, weighted_mase, weighted_mae 
+        
 def apply_forecasting_training(dataset, clusters_labels, W=10):
     logs = open("logs", "w")
     clusters_X, clusters_labels = Clustering.split_to_clusters(dataset, clusters_labels, W=W + 2)
@@ -185,7 +290,7 @@ def apply_forecasting_training(dataset, clusters_labels, W=10):
             tmp = np.array([np.inf] * dataset.shape[-1])
             metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
             continue
-        model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
+        model = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
         predicted = model.predict(test_X) #(N, Q)
         predicted_original = sc.inverse_transform(predicted)
         predicted_original = sc.add_first_elements(predicted_original)
@@ -200,8 +305,7 @@ def apply_forecasting_training(dataset, clusters_labels, W=10):
     weighted_mae =  np.average(np.row_stack([metrics[i]["mae"] for i in range(N_clusters)]), axis=0, weights=clusters_sizes)
 #     mae_on_max_cluster = metrics[np.argmax(clusters_sizes)]['mae']
     return model, full_results, metrics, weighted_mase, weighted_mae 
-        
-
+    
 def try_parameters(parameters, dataset):
     """
     Args:
@@ -255,7 +359,7 @@ def try_parameters(parameters, dataset):
                 tmp = np.array([1e12] * dataset.shape[-1])
                 metrics[cluster_num] = {"mae": tmp, "mape": tmp, "mase": tmp}
                 continue
-            model, history = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
+            model = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
             predicted = model.predict(test_X) #(N, Q)
             print(f"{train_X[0]=}\n{train_y[0]=}\n{model(train_X[None, 0])=}\n", file=logs)
             predicted_original = sc.inverse_transform(predicted)
@@ -312,7 +416,54 @@ def split_X_y(dataset):
     return X, y
 
 
-class MyStandardScaler:
+class MyStandardScaler(StandardScaler):
+    def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
+        self.scaler = StandardScaler(**kwargs)
+    
+    def _reshape(self, data, shape_len=2):
+        self.origin_shape_len = len(data.shape)
+        print(f"{self.origin_shape_len=} vs {shape_len=}")
+        if len(data.shape) > shape_len:
+            self.Q = data.shape[-1]
+            self.n = data.shape[0]
+            data = data.reshape(-1, data.shape[-1])
+            print(data.shape)
+        elif len(data.shape) < shape_len:
+            data = data.reshape(self.n, -1, self.Q)
+        return data
+
+    
+    def fit(self, data): #add save_first_elements
+        data = np.diff(data, axis=1)
+        data = self._reshape(data)
+        print(f"In fit {data.shape=}")
+        self.scaler.fit(data)
+        return self
+        
+    def transform(self, data, y=1):
+        self.first_elements = data[:, -y-1, :]
+        result_data = np.diff(data, axis=1)
+        data = self._reshape(data)
+        result_data = self.scaler.transform(data)
+        result_data = self._reshape(result_data, shape_len=self.origin_shape_len)
+        return result_data
+    
+    def fit_transform(self, data):
+        return self.fit(data).transform(data)
+    
+    def inverse_transform(self, data):
+        data = self._reshape(data)
+        result_data = self.scaler.inverse_transform(data)
+        result_data = self._reshape(result_data, shape_len=self.origin_shape_len)
+#         result_data += self.first_elements[:data.shape[0]]
+        return result_data
+#         result_data = self.std * data + self.mean
+#         return data + self.first_elements[:data.shape[0]] #костыли
+
+        
+
+class MyStandardScaler_last:
     def __init__(self):
         pass
     def fit(self, data):

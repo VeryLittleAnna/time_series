@@ -212,16 +212,3 @@ class ClustersMetrics:
                 writer.writerow([W] + [ClustersMetrics.answers_DB[(W, N)] for N in Ns])
     
 
-
-def create_segments(data, segment_size=1):
-    """
-    Args:
-        data (ndarray): (N, Q)
-    return segments (N // segment_size, segment, Q)
-    """
-    if isinstance(data, list):
-        return [create_segments(part, segment_size=segment_size) for part in data]
-    N, Q = data.shape
-    data = data[:N - N % segment_size, ...]
-    segments = data.reshape(N // segment_size, segment_size, Q)
-    return segments
