@@ -28,9 +28,71 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-15
 MAX_ITERS_KMEANS = 200
-MAX_EPOCHS = 20
+MAX_EPOCHS = 50
+
+TRAIN_MODE, VALID_MODE, TEST_MODE, GLOBAL_TEST_MODE = [0, 1, 2, 3]
 
 
+def scaled_model(model, scaler, diff=True, verbose=False):
+    mean, scale = scaler.mean_, scaler.scale_
+    verbose and print(f"Base model input: {model.input_shape}")
+    _, lag, var = model.input_shape
+    if diff:
+        input_ = keras.layers.Input(shape=(lag+1, var))
+        verbose and print(f"New input: {input_.shape}")
+        output_ = input_[:, 1:] - input_[:, :-1] # дифференцируем вход
+    else:
+        input_ = keras.layers.Input(shape=(lag, var))
+        output_ = input_
+    output_ = (output_ - mean) / scale # scale.transform
+    output_ = model(output_)
+    verbose and print(f"Base model output: {model.output_shape}")
+#     if len(output_.shape) < 3:
+#         output_ = tf.expand_dims(output_, -1)
+#         verbose and print(f"New output: {output_.shape}")
+    output_ = output_ * scale + mean # scale.inverse_transform
+    verbose and print(f"{output_.shape=}")
+    if diff: # возвращаем выход(ы) от производных
+        last = input_[:, -1] # последнее значение лагов
+#         output_ = tf.concat([last, output_], axis=1) # last, diff1, diff2 ...
+#         output_ = tf.math.cumsum(output_, axis=1)[:, 1:] # last + diff1, last + diff1 + diff2 ...
+        output_ += input_[..., -1, :]
+        verbose and print(f"{output_.shape=}")
+
+    return keras.models.Model(inputs=input_, outputs=output_)
+
+
+def apply_forecasting_training(dataset, clusters_labels, W=10, model=None):
+    scaler = StandardScaler()
+    scaled_dataset = np.diff(dataset, axis=0)
+    N, Q = dataset.shape
+    clusters_labels = clusters_labels[1:]
+    scaled_dataset = scaler.fit_transform(scaled_dataset)
+    full_results = np.zeros((N - W - 1, 2 * Q + 2))
+    N_clusters = len(np.unique(clusters_labels))
+    cur_models = [0] * N_clusters
+    metrics = [0] * N_clusters
+    clusters_X, clusters_labels = Clustering.split_to_clusters(scaled_dataset, clusters_labels, W=W+1)
+    if model is None:
+        model = Sequential(
+            LSTM(units = 50, activation="tanh", recurrent_activation="sigmoid", input_shape = (W, Q)),
+            Dense(Q)
+        )
+        my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2, restore_best_weights=True)
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss='mae', run_eagerly=True, callbacks=[my_early_stopping])
+        
+    clusters_X, clusters_labels = Clustering.split_to_clusters(scaled_dataset, clusters_labels, W=W+1)
+    for cluster_num in range(N_clusters):
+        clusters_mask = (clusters_labels == cluster_num)
+        X, y = split_X_y(clusters_X[cluster_num])
+        train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(X, y, part_of_test=0.2, part_of_valid=0.2)
+        model.fit(train_X, train_y, epochs=EPOCHS, batch_size=batch_size, shuffle=True, verbose=1)
+        cur_models[cluster_num] = scaled_model(model, scaler)
+#         test_predict = model.predict(test_X)
+        full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, scaler, dataset, W)
+    metrics[cluster_num] = calc_metrics_for_full_results(full_results[clusters_mask])
+    return cur_models, full_results, metrics                                               
+                             
 
 def my_mase(y_true, y_pred, multioutput='raw_values'):
     numer = my_mae(y_true, y_pred, multioutput='raw_values')
@@ -116,9 +178,9 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
     """
 #     tf.debugging.set_log_device_placement(True)
     N_features = dataset_X.shape[-1]
-    plt.hist(dataset_y[:, 9])
-    plt.title(dataset_X.shape)
-    plt.show()
+#     plt.hist(dataset_y[:, 9])
+#     plt.title(dataset_X.shape)
+#     plt.show()
     
     if window_size is None:
         window_size = dataset_X.shape[1]
@@ -142,40 +204,23 @@ def learn(dataset_X, dataset_y, window_size=None, valid_X=None, valid_y=None):
 
 def calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask_train_test, model, scaler, dataset, W):
     print(f"In calc_results: {train_X.shape[0]}, {valid_X.shape[0]}, {test_X.shape[0]}, sum = {train_X.shape[0] + valid_X.shape[0] + test_X.shape[0]}")
-    print(scaler.__dict__)
     N = train_y.shape[0] + valid_y.shape[0] + test_y.shape[0]
     X = np.concatenate((train_X, valid_X, test_X), axis=0)
     y = np.concatenate((train_y, valid_y, test_y), axis=0)
-    plt.hist(y[:, 9])
-    plt.show()
     Q = train_X.shape[-1]
-    results = np.zeros((y.shape[0], 4 * Q + 2), dtype=np.float64)
+    results = np.zeros((y.shape[0], 2 * Q + 2), dtype=np.float64)
 #     results = {}
     predicted = model(X)
     assert(y.shape[0] == predicted.shape[0])
-    print(f"!!!! {np.mean(predicted)}")
-    print(predicted.shape)
-    plt.clf()
-    plt.plot(predicted[:100, 9], label="predicted")
-    plt.plot(y[:100, 9], label="true")
-    plt.legend()
-    plt.show()
-#     assert(0)
     predicted_original = scaler.inverse_transform(predicted)
     y_true = scaler.inverse_transform(y)
-    print(f"!!!! {np.mean(predicted_original)}")
-    print(f"{np.mean(np.abs(predicted_original - y))}")
 #     predicted_original = scaler.add_first_elements(predicted_original)
     results[:, :Q] = y_true
     results[:, Q:2 * Q] = predicted_original
-    results[:, 2*Q:3*Q] = y
-    results[:, 3*Q:4*Q] = predicted
-    results[:, 4 * Q] = cluster_num
-    results[:, 4 * Q + 1] = mask_train_test
-    plt.plot(y_true[:100, 9], label="true")
-    plt.plot(predicted_original[:100, 9], label='predicted')
-    plt.legend()
-    plt.show()
+#     results[:, 2*Q:3*Q] = y
+#     results[:, 3*Q:4*Q] = predicted
+    results[:, 2 * Q] = cluster_num
+    results[:, 2 * Q + 1] = mask_train_test
     return results
 #     return , predicted_original + dataset[W:]
 #     return results 
@@ -195,7 +240,7 @@ def apply_forecasting_training_simple_version(dataset, clusters_labels, W=10):
     N, Q = dataset.shape
     clusters_labels = clusters_labels[1:]
     scaled_dataset = scaler.fit_transform(scaled_dataset)
-    full_results = np.zeros((N - W - 1, 4 * Q + 2))
+    full_results = np.zeros((N - W - 1, 2 * Q + 2))
     N_clusters = len(np.unique(clusters_labels))
     cur_models = [0] * N_clusters
     metrics = [0] * N_clusters
@@ -204,18 +249,50 @@ def apply_forecasting_training_simple_version(dataset, clusters_labels, W=10):
         clusters_mask = (clusters_labels == cluster_num)
         X, y = split_X_y(clusters_X[cluster_num])
         train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(X, y, part_of_test=0.2, part_of_valid=0.2)
-        print(np.sum(clusters_mask), full_results.shape)
         model = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
-        cur_models[cluster_num] = model
+        cur_models[cluster_num] = scaled_model(model, scaler)
 #         test_predict = model.predict(test_X)
         full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, scaler, dataset, W)
-        
         metrics[cluster_num] = calc_metrics_for_full_results(full_results[clusters_mask]) #?
+    full_results[:, :Q] += dataset[W:-1]
+    full_results[:, Q:2*Q] += dataset[W:-1]
+    return cur_models, full_results, metrics
+#     return model, full_results, metrics
 
-#     full_results[:, Q:2*Q] += dataset[W:-1] #first values
-#     full_results[:, :Q] += dataset[W:-1]
-    model = {"models":cur_models, "scaler":scaler}
-    return model, full_results, metrics
+
+
+def predict_through_clusters(dataset, clusters_model, prediction_models, W=10):
+    """"
+    Test the whole process: classify the input window and forecast next step for it
+    Args:
+        dataset (ndarray) : (N_samples, N_features)
+        clusters_model (kmeans model) : 
+        prediction_models (list) : list of forecasting models
+        window_size_clustering (int)
+        window_size_forecasting (int)
+    Returns:
+        y_pred (ndarray) : (N_samples - window_size_forecasting + 1, N_features)
+    """
+    N, Q = dataset.shape
+    N_clusters = len(prediction_models)
+    clusters_labels = clusters_model.predict(dataset)
+    clusters_X, clusters_labels = Clustering.split_to_clusters(dataset, clusters_labels, W=W+1, N_clusters=N_clusters)
+#     clusters_labels = clusters_labels[1:]
+    full_results = np.zeros((N - W, Q + 2)) #predicted_values, cluster_num
+    for cluster_num in range(N_clusters):
+        mask = (clusters_labels == cluster_num)
+        if np.sum(mask) == 0:
+            continue
+        assert(mask.sum() == clusters_X[cluster_num].shape[0])
+        cur_windows = clusters_X[cluster_num]
+        predicted = prediction_models[cluster_num].predict(cur_windows)
+        full_results[mask, :Q] = predicted
+        full_results[mask,  Q] = cluster_num
+    full_results[:, Q + 1] = GLOBAL_TEST_MODE
+    return full_results
+
+
+
 
 def apply_forecasting_training_new_version(dataset, clusters_labels, learning_function=learn, W=10, logs=None):
     if logs is None:
@@ -262,7 +339,7 @@ def apply_forecasting_training_new_version(dataset, clusters_labels, learning_fu
 #     mae_on_max_cluster = metrics[np.argmax(clusters_sizes)]['mae']
     return model, full_results, metrics, weighted_mase, weighted_mae 
         
-def apply_forecasting_training(dataset, clusters_labels, W=10):
+def apply_forecasting_training_last(dataset, clusters_labels, W=10):
     logs = open("logs", "w")
     clusters_X, clusters_labels = Clustering.split_to_clusters(dataset, clusters_labels, W=W + 2)
     full_results = np.zeros((clusters_labels.shape[0], 2 * dataset.shape[-1] + 2)) # real_Q, Q, cluster_num, mask
@@ -554,7 +631,8 @@ def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2, part_of_valid=No
     test_y = dataset_y[n_split:, ...]
     test_ind = np.arange(n_split, dataset_y.shape[0])
     mask = np.zeros(dataset_y.shape[0])
-    mask[n_split:] = 2 #test
+    mask[:n_split] = TRAIN_MODE #train
+    mask[n_split:] = TEST_MODE #test
     if part_of_valid is None:
         train_X = dataset_X[:n_split, ...]
         train_y = dataset_y[:n_split, ...]
@@ -564,56 +642,7 @@ def split_to_train_test(dataset_X, dataset_y, part_of_test=0.2, part_of_valid=No
     valid_y = dataset_y[valid_n_split:n_split, ...]
     train_X = dataset_X[:valid_n_split, ...]
     train_y = dataset_y[:valid_n_split, ...]
-    mask[valid_n_split:n_split] = 1 #valid
+    mask[valid_n_split:n_split] = VALID_MODE #valid
     return train_X, train_y, valid_X, valid_y, test_X, test_y, mask
 
-def predict_through_clusters(dataset, clusters_model, prediction_models, scalers, window_size_clustering=1, window_size_forecasting=10):
-    """"
-    Test the whole process: classify the input window and forecast next step for it
-    Args:
-        dataset (ndarray) : (N_samples, N_features)
-        clusters_model (kmeans model) : 
-        prediction_models (list) : list of forecasting models
-        window_size_clustering (int)
-        window_size_forecasting (int)
-    Returns:
-        y_pred (ndarray) : (N_samples - window_size_forecasting + 1, N_features)
-    """
-    N_clusters = len(prediction_models)
-    # dataset_windows = sliding_window_view(dataset, (window_size_clustering, dataset.shape[-1]))
-    # dataset_windows = np.array([dataset[i:i+window_size_clustering].flatten() for i in range(dataset.shape[0] - window_size_clustering)])
-    dataset_windows = sliding_window_view(dataset, (window_size_clustering, dataset.shape[-1])) #(N, 1, W, Q)
-    new_shape = dataset_windows.shape
-    dataset_windows = dataset_windows.reshape(new_shape[0], new_shape[2] * new_shape[3])
-    cluster_nums = clusters_model.predict(dataset_windows)
-    print(f"{dataset.shape=}, {dataset_windows.shape=}, {cluster_nums.shape=}, {dataset.shape[0] - dataset_windows.shape[0]}")
-    cluster_nums = np.pad(cluster_nums, (dataset.shape[0] - dataset_windows.shape[0], 0), mode='constant', constant_values=(cluster_nums[0])) #-1
-    print(f"After pad: {dataset.shape=}, {cluster_nums.shape=}")
-    # if window_size_clustering > window_size_forecasting:
-    #     cluster_num = np.pad(cluster_nums, (0, ), mode='constant', constant_values=(cluster_nums[-1]))
-    y_pred = np.zeros((dataset.shape[0] - window_size_forecasting, dataset.shape[-1]))
-    #only if dif then +1
-    dataset_windows = sliding_window_view(dataset, (window_size_forecasting + 1, dataset.shape[-1]))
-    cluster_nums = cluster_nums[window_size_forecasting:] #+1
-    full_results = np.zeros((cluster_nums.shape[0], 2 * dataset.shape[-1] + 2)) # real_Q, Q, cluster_num, mask
-    for cluster_num in range(N_clusters):
-        mask = (cluster_nums == cluster_num)
-        if np.sum(mask) == 0:
-            continue
-        
-        cur_windows = dataset_windows[mask, 0, ...] #(M, Wf, Q)
-        if isinstance(prediction_models[cluster_num], int):
-            #too small cluster to create model
-            y_pred[mask] = clusters_model.cluster_centers_[cluster_num][-dataset.shape[-1]:]
-            continue
-        scalers[cluster_num].save_first_elements(cur_windows)
-        cur_windows = np.array(scalers[cluster_num].transform(cur_windows))
-        cur_pred = np.array(prediction_models[cluster_num](cur_windows)) #(M, Q)
-        cur_pred = scalers[cluster_num].inverse_transform(cur_pred)
-        cur_pred = scalers[cluster_num].add_first_elements(cur_pred)
-        y_pred[mask] = cur_pred
-        Q = dataset.shape[-1]
-        full_results[mask, Q:2 * Q] = cur_pred
-        full_results[mask, 2 * Q] = cluster_num
-        full_results[mask, 2 * Q + 1] = 3 #global test 
-    return y_pred, full_results
+
