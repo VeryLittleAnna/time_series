@@ -12,6 +12,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from sklearn.cluster import MeanShift
 
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.neighbors import KNeighborsClassifier
 
 
 N_clusters=5
@@ -44,14 +45,26 @@ class Kmeans_for_windows(Clusterization):
         self.max_iter = max_iter
 
     def fit_predict(self, dataset):
+        print(f"{str(self)}: {dataset.shape}")
         windows = self.prepare(dataset)
         if self.N_clusters == 1:
             return np.zeros((windows.shape[0]), dtype=np.int8)
         model = KMeans(n_clusters=self.N_clusters, max_iter=self.max_iter, init='random') #n_jobs ??
 
         labels = model.fit_predict(windows)
+        labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
         self.model = model
-        return model
+        print("Done")
+
+        return labels
+    
+    def predict(self, dataset):
+        windows = self.prepare(dataset)
+        labels = self.model.predict(windows)
+        labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
+
+        return labels
+    
     def __str__(self):
         return 'Kmeans_for_windows'
 
@@ -61,26 +74,48 @@ class MeanShift_for_windows(Clusterization):
         self.max_iter = max_iter
 
     def fit_predict(self, dataset):
+        print(f"{str(self)}: {dataset.shape}")
         windows = self.prepare(dataset)
         model = MeanShift(max_iter=self.max_iter, n_jobs=-1) 
         labels = model.fit_predict(windows)
+        labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
+
         self.model = model
-        return model
+        return labels
+    
     def __str_(self):
         return 'MeanShift_for_windows'
     
 class AgglomerativeClustering_for_windows(Clusterization):
-    def __init__(self, N_clusters=4, **kwargs):
+    def __init__(self, N_clusters=4, knn_neighbors=3, **kwargs):
         super().__init__(**kwargs)
         self.N_clusters = N_clusters
+        self.knn_neighbors = knn_neighbors
+        
     def fit_predict(self, dataset):
+        print(f"{str(self)}: {dataset.shape}")
         windows = self.prepare(dataset)
         model = AgglomerativeClustering(n_clusters=self.N_clusters, affinity ="euclidean", linkage="ward") 
         labels = model.fit_predict(windows)
+        self._fit_classifier(windows, labels)
+        labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
         self.model = model
-        return model
+        print("Done")
+        return labels
+    
+    def predict(self, dataset):
+        windows = self.prepare(dataset)
+        labels = self.classifier.predict(windows)
+        labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
+        return labels
+    
     def __str_(self):
         return 'AgglomerativeClustering_for_windows'
+    
+    def _fit_classifier(self, windows, labels):
+        self.classifier = KNeighborsClassifier(n_neighbors=self.knn_neighbors)
+        self.classifier.fit(windows, labels)
+        
 
 # def KMeans_for_windows(dataset, W=5, N_clusters=8, max_iter=200):
 #     if isinstance(dataset, pd.DataFrame):
@@ -168,17 +203,22 @@ class DatasetClusters:
         self.cur_num_cluster += 1
 
 
-def split_to_clusters(dataset, labels, W): #W=11
-    N_clusters = len(np.unique(labels))
+def split_to_clusters(dataset, labels, W, y=1, N_clusters=None): #W=11
+    if N_clusters is None:
+        N_clusters = len(np.unique(labels))
     print(f"{N_clusters=}")
-    labels = labels[W-2:-1] #класс относится к последнему в X
+    labels = labels[W-1:] #класс относится к последнему в X
     clusters_datasets, clusters_y = [], []
     dataset_windows = sliding_window_view(dataset, (W, dataset.shape[-1])) #(N, 1, W, Q)
     print(f"{dataset_windows.shape=}, {labels.shape=}")
     assert(dataset_windows.shape[0] == labels.shape[0])
     for cluster_num in range(N_clusters):
         mask = (labels == cluster_num)
+        if np.sum(mask) == 0:
+            clusters_datasets.append(None)
+            continue
         clusters_datasets.append(dataset_windows[mask, 0, :, :])
+        print(f"IN Clustering.split_to_clusters: {mask.sum()=}, {clusters_datasets[-1].shape[0]}")
         # clusters_y.append(dataset_windows[mask, 0, W, :])
     return clusters_datasets, labels #, clusters_y
 
