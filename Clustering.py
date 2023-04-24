@@ -8,6 +8,7 @@ from collections import defaultdict
 from sklearn.metrics import davies_bouldin_score
 
 from numpy.lib.stride_tricks import sliding_window_view
+# from numpy.lib.stride_tricks import as_strided
 
 from sklearn.cluster import MeanShift
 
@@ -83,7 +84,7 @@ class MeanShift_for_windows(Clusterization):
         self.model = model
         return labels
     
-    def __str_(self):
+    def __str__(self):
         return 'MeanShift_for_windows'
     
 class AgglomerativeClustering_for_windows(Clusterization):
@@ -109,7 +110,7 @@ class AgglomerativeClustering_for_windows(Clusterization):
         labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
         return labels
     
-    def __str_(self):
+    def __str__(self):
         return 'AgglomerativeClustering_for_windows'
     
     def _fit_classifier(self, windows, labels):
@@ -251,4 +252,10 @@ class ClustersMetrics:
             for W in Ws:
                 writer.writerow([W] + [ClustersMetrics.answers_DB[(W, N)] for N in Ns])
     
-
+# def sliding_window_view(x, window_shape, axis=None):
+#     if axis is None:
+#         axis = tuple(range(x.ndim))
+#     out_strides = x.strides + tuple(x.strides[ax] for ax in axis)
+#     out_shape = tuple([x.shape[i] - window_shape[i] + 1 for i in range(len(window_shape))])
+#     out_shape += window_shape
+#     return as_strided(x, strides=out_strides, shape=out_shape, subok=False, writeable=False)
