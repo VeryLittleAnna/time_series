@@ -14,7 +14,7 @@ import tensorflow as tf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sktime.forecasting.model_selection import SlidingWindowSplitter
+# from sktime.forecasting.model_selection import SlidingWindowSplitter
 
 import csv
 from math import ceil
@@ -23,12 +23,14 @@ import csv
 import pickle
 import Clustering
 from sklearn.preprocessing import StandardScaler
-
+config = tf.compat.v1.ConfigProto( device_count = {'GPU': 1 , 'CPU': 16} ) 
+sess = tf.compat.v1.Session(config=config) 
+tf.compat.v1.keras.backend.set_session(sess)
 from numpy.lib.stride_tricks import sliding_window_view
 
 eps=1e-15
 MAX_ITERS_KMEANS = 200
-MAX_EPOCHS = 50
+MAX_EPOCHS = 100
 
 TRAIN_MODE, VALID_MODE, TEST_MODE, GLOBAL_TEST_MODE = [0, 1, 2, 3]
 
@@ -79,14 +81,14 @@ def apply_forecasting_training(dataset, clusters_labels, W=10, model=None):
             Dense(Q)
         )
         my_early_stopping = tf.keras.callbacks.EarlyStopping(monitor="val_loss", verbose=1, mode="min", patience=2, restore_best_weights=True)
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss='mae', run_eagerly=True, callbacks=[my_early_stopping])
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss='mae', run_eagerly=True)
         
     clusters_X, clusters_labels = Clustering.split_to_clusters(scaled_dataset, clusters_labels, W=W+1)
     for cluster_num in range(N_clusters):
         clusters_mask = (clusters_labels == cluster_num)
         X, y = split_X_y(clusters_X[cluster_num])
         train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(X, y, part_of_test=0.2, part_of_valid=0.2)
-        model.fit(train_X, train_y, epochs=EPOCHS, batch_size=batch_size, shuffle=True, verbose=1)
+        model.fit(train_X, train_y, epochs=EPOCHS, batch_size=batch_size, shuffle=True, verbose=1, callbacks=[my_early_stopping])
         cur_models[cluster_num] = scaled_model(model, scaler)
 #         test_predict = model.predict(test_X)
         full_results[clusters_mask] = calc_results(cluster_num, train_X, train_y, valid_X, valid_y, test_X, test_y, mask, model, scaler, dataset, W)
@@ -99,7 +101,7 @@ def my_mase(y_true, y_pred, multioutput='raw_values'):
     if y_true.shape[0] == 1:
         denom = 1
     else:
-        denom = mae_naive(y_true, multioutput='raw_values')
+        denom = my_mae(y_true[1:], y_true[:-1], multioutput='raw_values')
     cur_mase = numer / np.maximum(denom, eps)
     if multioutput == 'uniform_average':
         return np.mean(cur_mase)
@@ -115,22 +117,6 @@ def my_mae(y_true, y_pred, multioutput='raw_values'):
     else:
         assert(False)
 
-
-def mae_naive(data, multioutput='raw_values'):
-    """
-    Args:
-        data : list of ndarray (Ni_samples, N_features)
-    """
-    if isinstance(data, np.ndarray):
-        data = [data]
-    cnt = sum([part.shape[0] - 1 for part in data]) * data[0].shape[1]
-    cur_mae = np.sum(np.row_stack([np.array(np.sum(np.abs(part[1:, ...] - part[:-1, ...]), axis=0)) for part in data]), axis=0)
-    if multioutput == 'raw_values':
-        return cur_mae / cnt
-    elif multioutput == 'uniform_average':
-        return np.sum(cur_mae) / cnt / cur_mae.shape[0]
-    else:
-        assert(False)
 
 
 def calc_metrics(y_true, y_pred):
