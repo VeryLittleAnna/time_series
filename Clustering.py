@@ -14,6 +14,8 @@ from sklearn.cluster import MeanShift
 
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
 
 
 N_clusters=5
@@ -23,10 +25,14 @@ class Clusterization:
     def __init__(self, W=1):
         self.W = W
         print(f"Clusterization __init__: {W=}, {type(self.W)}")
-    def prepare(self, dataset):
+    def prepare(self, dataset):            
         if isinstance(dataset, pd.DataFrame):
             dataset = dataset.to_numpy()
+        if not hasattr(self, "scaler"):
+            self.scaler = StandardScaler()
+            self.scaler.fit(dataset[:, ..., :])
         if len(dataset.shape) == 2:
+            dataset = self.scaler.transform(dataset)
             dataset_windows = sliding_window_view(dataset, (self.W, dataset.shape[-1])) #(N, 1, W, Q)
             new_shape = dataset_windows.shape
             dataset_windows = dataset_windows.reshape(new_shape[0], new_shape[2] * new_shape[3]) #(N, W, Q)
@@ -82,6 +88,7 @@ class MeanShift_for_windows(Clusterization):
         labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
 
         self.model = model
+        print("Done")
         return labels
     
     def __str__(self):
@@ -116,7 +123,48 @@ class AgglomerativeClustering_for_windows(Clusterization):
     def _fit_classifier(self, windows, labels):
         self.classifier = KNeighborsClassifier(n_neighbors=self.knn_neighbors)
         self.classifier.fit(windows, labels)
+       
+    
+class DBSCAN_for_windows(Clusterization):
+    def __init__(self, eps=0.5, min_samples=5, **kwargs):
+        super().__init__(**kwargs)
+        self.model = DBSCAN(eps=eps, min_samples=min_samples)
+        self.eps = eps
+        self.min_samples = min_samples
+        print(f"{eps=}, {min_samples=}")
         
+    def fit_predict(self, dataset):
+        print(f"{str(self)}: {dataset.shape}, eps={self.eps}, k={self.min_samples}")
+        windows = self.prepare(dataset)
+        labels = self.model.fit_predict(windows) #noisy are -1
+#         _, labels_cnt = np.unique(labels, return_counts=True)
+#         print(f"{labels_cnt=}")
+        noisy = labels == -1
+        self.n_normal_clusters = len(np.unique(labels[~noisy]))
+        if noisy.any():
+            labels[noisy] = self.n_normal_clusters
+        if noisy.all():
+            print("All noisy")
+            return np.zeros(dataset.shape[0])
+        self._fit_classifier(windows[~noisy], labels[~noisy])
+        labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
+        print("Done")
+        return labels
+    
+    def predict(self, dataset):
+        windows = self.prepare(dataset)
+        labels = self.classifier.predict(windows)
+        labels = np.pad(labels, (dataset.shape[0] - windows.shape[0], 0), mode='constant', constant_values=(labels[0]))
+        return labels
+    
+    def __str__(self):
+        return 'DBSCAN_for_windows'
+    
+    def _fit_classifier(self, windows, labels):
+        
+        self.classifier = KNeighborsClassifier(n_neighbors=len(np.unique(labels)))
+        self.classifier.fit(windows, labels)
+       
 
 # def KMeans_for_windows(dataset, W=5, N_clusters=8, max_iter=200):
 #     if isinstance(dataset, pd.DataFrame):
@@ -216,7 +264,7 @@ def split_to_clusters(dataset, labels, W, y=1, N_clusters=None): #W=11
     for cluster_num in range(N_clusters):
         mask = (labels == cluster_num)
         if np.sum(mask) == 0:
-            clusters_datasets.append(None)
+            clusters_datasets.append(np.zeros((0, W, dataset.shape[-1])))
             continue
         clusters_datasets.append(dataset_windows[mask, 0, :, :])
         print(f"IN Clustering.split_to_clusters: {mask.sum()=}, {clusters_datasets[-1].shape[0]}")

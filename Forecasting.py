@@ -233,6 +233,8 @@ def apply_forecasting_training_simple_version(dataset, clusters_labels, W=10):
     clusters_X, clusters_labels = Clustering.split_to_clusters(scaled_dataset, clusters_labels, W=W+1)
     for cluster_num in range(N_clusters):
         clusters_mask = (clusters_labels == cluster_num)
+        if clusters_X[cluster_num] is None or not clusters_X[cluster_num].any():
+           continue 
         X, y = split_X_y(clusters_X[cluster_num])
         train_X, train_y, valid_X, valid_y, test_X, test_y, mask = split_to_train_test(X, y, part_of_test=0.2, part_of_valid=0.2)
         model = learn(train_X, train_y, valid_X=valid_X, valid_y=valid_y)
